@@ -1,0 +1,75 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+
+# uv 缓存（当前放在仓库内，工作环境用；不入库）
+.uvcache/
+
+# 打包/分发
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# 测试/覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+
+# ===== Node / Vite =====
+node_modules/
+.npmcache/
+
+# Vite 缓存
+.vite/
+
+# npm/yarn/pnpm 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 数据与缓存 =====
+# SQLite 数据库（含示例数据，会被开发过程改写）
+*.db
+*.sqlite
+*.sqlite3
+
+# akshare 拉的全量股票缓存
+stock_cache.json
+
+# ===== 环境变量 =====
+.env
+.env.local
+.env.*.local
+
+# ===== IDE / OS =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== 项目特定 =====
+portfolio_api/portfolio.db
+portfolio_api/stock_cache.json
+portfolio_api/.venv/
+
+# uv 锁文件如果暂不想跟踪可加（保留是因为团队协作时应该跟）
+# uv.lock
