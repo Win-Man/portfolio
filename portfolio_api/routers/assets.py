@@ -251,6 +251,12 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
     if not db_asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
+    # 0. 先清分红缓存，再拉取。
+    #    "刷新"必须用最新数据：若缓存是热的（最多 6 小时前），
+    #    先拉后清会让写进 DB 的 ttm_yield 基于过期数据，
+    #    而列表展示的 y2024/y2025 却是新的 —— 两者自相矛盾。
+    invalidate_dividend_cache(db_asset.code)
+
     # 1. 获取 TTM（滚动 12 个月）每股分红
     dividend_per_share = await fetch_ttm_dividend_per_share(db_asset.code)
 
@@ -266,9 +272,6 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
                 db_asset.ttm_yield = round(dividend_per_share / price_data["price"] * 100, 2)
             db_asset.price_fetched_at = datetime.now(timezone.utc)
         db_asset.price_source = price_data["source"]  # real / mock 都更新
-        # real 价更新意味着 akshare 的分红可能也变了，让下一次 get_assets 看到新数据
-        if price_data["source"] == "real":
-            invalidate_dividend_cache(db_asset.code)
 
         db.commit()
         db.refresh(db_asset)
@@ -281,7 +284,7 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
 async def refresh_all_prices(portfolio_id: int, db: Session = Depends(get_db)):
     """批量刷新组合内所有股票价格，同时更新分红和 ttm_yield
 
-    性能优化（vs 之前）：
+    性能优化：
     - 5 路并发（asyncio.Semaphore）抓取，避免单只股票阻塞后续所有
     - 同一只股票在本次请求内只发一次分红接口（其它用同一缓存）
     - 失败的单只资产不影响其它
@@ -291,6 +294,14 @@ async def refresh_all_prices(portfolio_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
     assets = db.query(Asset).filter(Asset.portfolio_id == portfolio_id).all()
+
+    # 先清分红缓存，再拉取（顺序很关键）。
+    # 若先拉后清：缓存是热的时候会用最多 6 小时前的分红算 TTM 写进 DB，
+    # 而清缓存后列表展示的 y2024/y2025 又是新拉的 —— 同一个页面里
+    # 「TTM 收益率」与「历年分红」会基于不同时刻的数据，自相矛盾。
+    # 这里清完再拉，之后缓存里留的就是本次拉到的新数据，可直接复用 6 小时。
+    for asset in assets:
+        invalidate_dividend_cache(asset.code)
 
     # 把每只资产的处理逻辑提到一个独立协程，外面统一 gather
     async def refresh_one(asset: Asset) -> dict:
@@ -329,10 +340,7 @@ async def refresh_all_prices(portfolio_id: int, db: Session = Depends(get_db)):
 
     results = await asyncio.gather(*(bounded(a) for a in assets))
 
-    # 任何 real 价的更新都让分红缓存失效，下一次列表请求能拿到最新 y2024/y2025
-    for asset, r in zip(assets, results):
-        if r.get("success") and r.get("source") == "real":
-            invalidate_dividend_cache(asset.code)
-
+    # 注意：这里**不再**清缓存。开头的 invalidate 已保证本次拉到的是新数据，
+    # 拉完后缓存里存的就是新数据，保留它可让后续列表请求直接命中（6 小时内）。
     db.commit()
     return {"results": list(results)}

@@ -161,7 +161,7 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：81 个用例（API / ETF / TTM 口径）
+# 后端：88 个用例（API / ETF / TTM 口径 / 刷新缓存时效）
 cd portfolio_api && uv run pytest -q
 
 # 前端：26 个用例（饼图数据整理、格式化、悬浮提示）
