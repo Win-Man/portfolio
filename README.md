@@ -17,7 +17,7 @@ portfolio/
   - ETF（如 `561580` 央企红利ETF）：`5`/`15`/`16`/`18` 开头，红利 ETF 多为**月度分红**，TTM 按**近 12 个月合计**计算
 - 一键拉取实时行情（腾讯）+ 历史分红（个股走 cninfo，ETF 走 sina，均经 akshare）
 - 加权 TTM 收益率、预计年收入、资产明细展示
-- **持仓分布可视化**：持仓市值分布 + 预计年收入分布两张环形图，同一标的跨图同色，便于对照股息效率
+- **持仓分布可视化**：持仓市值分布 + 预计年收入分布两张饼图（实心、无图例，悬浮查看明细），同一标的跨图同色，便于对照股息效率
 - 历年分红展开表、按字段排序
 
 > 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
@@ -132,12 +132,14 @@ portfolio_api/
 
 portfolio_web/
 ├── vite.config.js      # 含 /api proxy
+├── scripts/
+│   └── verify-chart-tooltip.mjs  # 用 CDP 验证饼图悬浮提示
 └── src/
     ├── App.vue
     ├── views/Portfolio.vue
     ├── components/
     │   ├── PortfolioOverview.vue
-    │   ├── PortfolioCharts.vue   # 两张分布环形图（容器）
+    │   ├── PortfolioCharts.vue   # 两张分布饼图（容器）
     │   ├── ChartPie.vue          # 可复用饼图组件（ECharts 封装）
     │   ├── AssetList.vue
     │   ├── AssetItem.vue
@@ -162,8 +164,11 @@ portfolio_web/
 # 后端：81 个用例（API / ETF / TTM 口径）
 cd portfolio_api && uv run pytest -q
 
-# 前端：20 个用例（饼图数据整理与格式化）
+# 前端：26 个用例（饼图数据整理、格式化、悬浮提示）
 cd portfolio_web && npm test
+
+# 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）
+cd portfolio_web && npm run verify:chart
 ```
 
 ## 待办

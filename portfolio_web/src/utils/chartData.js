@@ -104,3 +104,28 @@ export function truncate(name, max = 9) {
   const s = String(name ?? '')
   return s.length > max ? s.slice(0, max) + '…' : s
 }
+
+/**
+ * 悬浮提示的 HTML 内容（纯函数，便于单测）。
+ *
+ * 图例已移除，扇区识别完全依赖此提示，因此内容要完整：
+ * 名称 + 精确金额 + 两位小数占比。
+ */
+export function buildTooltipHtml({ name, value, percent, unit = '¥' }) {
+  const pct = Number.isFinite(percent) ? percent : 0
+  return [
+    `<div style="font-weight:600;margin-bottom:4px">${escapeHtml(name)}</div>`,
+    `<div>${unit}${formatExact(value)}</div>`,
+    `<div style="opacity:.75">占比 ${pct.toFixed(2)}%</div>`,
+  ].join('')
+}
+
+/** 极简 HTML 转义，防止标的名称里的特殊字符破坏提示结构 */
+export function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+

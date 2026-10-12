@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 import {
   aggregateAssets,
   buildSlices,
+  buildTooltipHtml,
+  escapeHtml,
   formatCompact,
   formatExact,
   stableNameOrder,
@@ -185,6 +187,52 @@ test('truncate 超长加省略号', () => {
   assert.equal(truncate('长江电力', 8), '长江电力')
   assert.equal(truncate('', 8), '')
   assert.equal(truncate(null, 8), '')
+})
+
+// ---------- 悬浮提示（图例移除后，这是唯一识别扇区的途径，必须完整）----------
+
+test('buildTooltipHtml 包含名称、金额、占比三项信息', () => {
+  const html = buildTooltipHtml({
+    name: '长江电力',
+    value: 5876,
+    percent: 7.364,
+    unit: '¥',
+  })
+  assert.ok(html.includes('长江电力'), '应含名称')
+  assert.ok(html.includes('¥5,876.00'), '应含精确金额（千分位 + 两位小数）')
+  assert.ok(html.includes('占比 7.36%'), '应含两位小数占比')
+})
+
+test('buildTooltipHtml 处理缺失占比不崩溃', () => {
+  const html = buildTooltipHtml({ name: 'A', value: 1, percent: undefined })
+  assert.ok(html.includes('占比 0.00%'))
+})
+
+test('buildTooltipHtml 使用传入单位', () => {
+  const html = buildTooltipHtml({ name: 'A', value: 100, percent: 50, unit: 'HK$' })
+  assert.ok(html.includes('HK$100.00'))
+})
+
+test('buildTooltipHtml 转义名称中的 HTML 特殊字符', () => {
+  const html = buildTooltipHtml({ name: '<img src=x>', value: 1, percent: 1 })
+  assert.ok(!html.includes('<img'), '不应注入原始标签')
+  assert.ok(html.includes('&lt;img'))
+})
+
+test('escapeHtml 覆盖四个特殊字符', () => {
+  assert.equal(escapeHtml('&<>"'), '&amp;&lt;&gt;&quot;')
+  assert.equal(escapeHtml(null), '')
+  assert.equal(escapeHtml(undefined), '')
+})
+
+test('占比总和为 100 时，提示中的百分比与实际一致', () => {
+  const assets = [
+    { name: 'A', holding_value: 30 },
+    { name: 'B', holding_value: 70 },
+  ]
+  const slices = buildSlices(aggregateAssets(assets, (a) => a.holding_value))
+  const htmlA = buildTooltipHtml({ ...slices.find((s) => s.name === 'A'), unit: '¥' })
+  assert.ok(htmlA.includes('占比 30.00%'))
 })
 
 // ---------- 真实组合数据（用户当前持仓形态）----------

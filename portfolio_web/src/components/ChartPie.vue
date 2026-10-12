@@ -2,18 +2,15 @@
   <div class="chart-card">
     <div class="chart-header">
       <div class="chart-title">{{ title }}</div>
-      <div class="chart-meta" v-if="itemCount > 0">{{ itemCount }} 项标的</div>
+      <div v-if="total > 0" class="chart-total">
+        <span class="chart-total-label">{{ totalLabel }}</span>
+        <span class="chart-total-value">{{ unit }}{{ formatCompact(total) }}</span>
+      </div>
     </div>
 
     <div class="chart-body">
       <!-- 用 v-show 而不是 v-if：容器需始终存在，ECharts 才能测量尺寸 -->
-      <div v-show="slices.length > 0" class="pie-wrap">
-        <div ref="el" class="chart-canvas"></div>
-        <div v-show="slices.length > 0" class="pie-center">
-          <div class="pie-center-value">{{ unit }}{{ formatCompact(total) }}</div>
-          <div class="pie-center-label">{{ totalLabel }}</div>
-        </div>
-      </div>
+      <div v-show="slices.length > 0" ref="el" class="chart-canvas"></div>
 
       <div v-if="slices.length === 0" class="chart-empty">
         <span class="empty-icon">📊</span>
@@ -26,17 +23,20 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-// 按需引入，避免打包整个 echarts
+// 按需引入，避免打包整个 echarts（无图例，故不引入 LegendComponent）
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
-import { LegendComponent, TooltipComponent } from 'echarts/components'
-import { LabelLayout } from 'echarts/features'
+import { TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
-import { buildSlices, formatCompact, formatExact, truncate } from '../utils/chartData.js'
+import {
+  buildSlices,
+  buildTooltipHtml,
+  formatCompact,
+} from '../utils/chartData.js'
 import { MISC_COLOR, pickColor } from '../utils/chartColors.js'
 
-echarts.use([PieChart, LegendComponent, TooltipComponent, LabelLayout, CanvasRenderer])
+echarts.use([PieChart, TooltipComponent, CanvasRenderer])
 
 const props = defineProps({
   title: { type: String, required: true },
@@ -59,7 +59,6 @@ const slices = computed(() =>
   buildSlices(props.items, { maxSlices: props.maxSlices, minShare: props.minShare })
 )
 const total = computed(() => slices.value.reduce((s, d) => s + d.value, 0))
-const itemCount = computed(() => slices.value.length)
 
 function colorOf(d, i) {
   return d.isMisc ? MISC_COLOR : pickColor(d.name, i, props.colorMap)
@@ -75,47 +74,27 @@ function buildOption() {
       backgroundColor: 'rgba(15, 23, 42, 0.92)',
       borderWidth: 0,
       padding: [8, 12],
+      extraCssText: 'border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.15);',
       textStyle: { color: '#f8fafc', fontSize: 12 },
-      formatter: (p) => {
-        const pct = percentOf[p.name] ?? p.percent
-        return [
-          `<div style="font-weight:600;margin-bottom:4px">${p.name}</div>`,
-          `<div>${props.unit}${formatExact(p.value)}</div>`,
-          `<div style="opacity:.75">占比 ${pct.toFixed(2)}%</div>`,
-        ].join('')
-      },
-    },
-    legend: {
-      type: 'scroll',
-      orient: 'vertical',
-      right: 4,
-      top: 'middle',
-      itemWidth: 10,
-      itemHeight: 10,
-      itemGap: 8,
-      icon: 'circle',
-      pageIconColor: '#2563eb',
-      pageIconInactiveColor: '#cbd5e1',
-      pageTextStyle: { color: '#64748b', fontSize: 11 },
-      textStyle: { fontSize: 12, color: '#475569' },
-      formatter: (name) => {
-        const pct = percentOf[name]
-        const label = truncate(name, 8)
-        return pct == null ? label : `${label}  ${pct.toFixed(1)}%`
-      },
+      formatter: (p) =>
+        buildTooltipHtml({
+          name: p.name,
+          value: p.value,
+          percent: percentOf[p.name] ?? p.percent,
+          unit: props.unit,
+        }),
     },
     series: [
       {
         type: 'pie',
-        // 环形：中间留白用于展示合计
-        radius: ['46%', '68%'],
-        center: ['34%', '50%'],
+        // 实心饼图：无图例占位，居中并尽量放大
+        radius: '78%',
+        center: ['50%', '50%'],
         avoidLabelOverlap: true,
         minAngle: 2,
         itemStyle: {
           borderColor: '#fff',
           borderWidth: 2,
-          borderRadius: 4,
         },
         label: { show: false },
         labelLine: { show: false },
@@ -145,7 +124,7 @@ function render() {
 
 onMounted(() => {
   nextTick(render)
-  // 监听容器尺寸变化（窗口缩放、侧栏展开、grid 断点切换）
+  // 监听容器尺寸变化（窗口缩放、断点切换）
   resizeObserver = new ResizeObserver(() => {
     if (chart) chart.resize()
   })
@@ -174,7 +153,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: var(--radius, 8px);
   box-shadow: var(--shadow, 0 1px 3px rgb(0 0 0 / 0.1));
-  padding: 16px 18px 8px;
+  padding: 16px 18px 12px;
   display: flex;
   flex-direction: column;
 }
@@ -183,6 +162,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 4px;
 }
 
@@ -192,50 +172,34 @@ onBeforeUnmount(() => {
   color: var(--text-primary, #1e293b);
 }
 
-.chart-meta {
+.chart-total {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.chart-total-label {
   font-size: 12px;
   color: var(--text-secondary, #64748b);
 }
 
-.chart-body {
-  flex: 1;
-  min-height: 280px;
-  position: relative;
+.chart-total-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary-color, #2563eb);
 }
 
-.pie-wrap {
+.chart-body {
+  /* 注意：不要用 flex:1 —— 它等价于 flex-basis:0%，
+     会覆盖 height 并与「卡片高度由内容决定」形成循环，导致高度塌成 0 */
   position: relative;
-  width: 100%;
-  height: 280px;
+  height: 300px;
 }
 
 .chart-canvas {
   width: 100%;
   height: 100%;
-}
-
-/* 环形中心：left 与 series.center[0] 保持一致 */
-.pie-center {
-  position: absolute;
-  left: 34%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  pointer-events: none;
-  line-height: 1.3;
-}
-
-.pie-center-value {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--text-primary, #1e293b);
-  white-space: nowrap;
-}
-
-.pie-center-label {
-  font-size: 11px;
-  color: var(--text-secondary, #64748b);
-  white-space: nowrap;
 }
 
 .chart-empty {
