@@ -172,9 +172,9 @@
 
 ### 5.1 `POST /api/assets/{id}/refresh-price`（单只）
 
-`assets.py:189-219`：
-
-1. 调 `fetch_latest_dividend_per_share(code)` → **后端函数**从 akshare 拉所有分红记录，**取最近一次"已实施"**的 `dividend_per_share`（见 `assets.py:38-45`）；若没有"已实施"则取第一条
+1. 调 `fetch_ttm_dividend_per_share(code)` → 拉全部历史分红，按 **`_sum_trailing_12m()` 累加「已实施」且除权日落在 `[今天-365天, 今天]` 内的分红**。
+   - 个股与 ETF **同一口径**，且与数据源返回顺序无关
+   - ⚠ 曾用名 `fetch_latest_dividend_per_share`，对个股走的是"取列表第一条"（假设降序，实际 akshare 返回升序），会取到最老的一期分红 —— 详见 §12
 2. 调 `fetch_real_time_price(code)` → 调腾讯 `qt.gtimg.cn`，解析 `v_sh600900="1~名称~代码~当前价~昨收~..."`，返回 `{price, yesterday_close, name, source: "real"}`
 3. 失败时 `fetch_real_time_price` 返回**模拟价**（`source: "mock"`），公式：
 
@@ -184,8 +184,8 @@
    mock_ttm = (dividend_per_share / mock_price × 100)
    ```
 
-4. **写入策略**（`assets.py:209-216`）：
-   - 若 `source == "real"`：覆盖 DB 的 `price` / `dividend_per_share` / `ttm_yield`（ttm = div × 100 / price），并写 `price_fetched_at = now`
+4. **写入策略**：
+   - 若 `source == "real"`：覆盖 DB 的 `price` / `dividend_per_share` / `ttm_yield`（`ttm = div × 100 / price`），并写 `price_fetched_at = now`
    - 若 `source == "mock"`：**只更新 `price_source` 标记，DB 里的价格不变**（避免假数据污染）
 5. 任何情况下都 `invalidate_dividend_cache(code)` 让下次列表请求重新算 y2024/y2025
 
@@ -278,7 +278,7 @@
 | 分红频率 | 1–2 次/年 | 红利 ETF 多为**月度**（561580 一年 12 期） |
 | 送股/转增 | 可能有 | 恒为 0 |
 | 分红状态 | `已实施` / `待实施` | 一律 `已实施`（sina 只记录已发生的） |
-| **TTM 股息率口径** | 最近一次已实施分红 ÷ 现价 | **近 12 个月合计** ÷ 现价 |
+| **TTM 股息率口径** | **近 12 个月合计** ÷ 现价 | **近 12 个月合计** ÷ 现价（已统一） |
 | 行情前缀 | `sh` / `sz` | `sh` / `sz`（同一套规则） |
 
 ### 11.2 ETF 分红「累计 → 每期」转换
@@ -295,16 +295,28 @@
 
 实现见 `routers/stocks.py` 的 `_fetch_etf_dividend_blocking()`；转换后**统一成与个股相同的字段结构**，因此下游（`y2024`/`y2025` 汇总、`dividend-history`、`refresh-price`）无需感知类型差异。
 
-### 11.3 为什么 ETF 的 TTM 必须用滚动 12 个月
+### 11.3 TTM 必须用滚动 12 个月（个股与 ETF 统一）
 
-红利 ETF 按月分红，若沿用个股的"取最近一次"口径会**严重低估**：
+`_sum_trailing_12m()`（`routers/assets.py`）是**唯一**的 TTM 口径实现，个股与 ETF 共用，**按日期过滤、与数据源返回顺序无关**。
+
+两类标的都会因"取单期"而失真，只是原因不同：
+
+**ETF —— 因为按月分红：**
 
 | 口径 | 每股分红 | 按 1.286 元计 | 偏差 |
 |---|---|---|---|
 | 最近一期（错误） | 0.005 | **0.39 %** | 低估约 19 倍 |
 | 近 12 个月合计（正确） | 0.095 | **7.39 %** | — |
 
-实现见 `routers/assets.py` 的 `_sum_trailing_12m()`，仅在 `is_etf(code)` 时启用。
+**个股 —— 因为 akshare 返回顺序是升序（最老在前），而代码曾假设降序：**
+
+| 口径 | 长江电力 600900 每股分红 | 按 29.38 元计 | 偏差 |
+|---|---|---|---|
+| 列表第一条（错误，实为 2004 年） | 0.0900 | **0.31 %** | 低估 11 倍 |
+| 近 12 个月合计（正确） | 1.0000 | **3.40 %** | — |
+
+> 明细见 §12。
+
 
 ### 11.4 `y2024` / `y2025` 对 ETF 的语义
 
@@ -358,3 +370,68 @@ curl -X POST http://localhost:8000/api/portfolios/1/assets \
   -d '{"name":"央企红利ETF华泰柏瑞","code":"561580","quantity":10000,"price":1.286}'
 curl -X POST http://localhost:8000/api/assets/<id>/refresh-price
 ```
+
+---
+
+## 12. 事故记录：个股 TTM 收益率被低估 5~50 倍
+
+**性质**：数据正确性 bug（已修）。影响所有**点过「刷新价格」的个股**。
+
+### 现象
+
+长江电力 600900 的 `dividend_per_share` 显示 **0.09**，而其 2026-07-17 实际分红为 **0.79**。
+`0.09` 恰好是 **2004-06-01** 那一期。
+
+### 根因
+
+`fetch_latest_dividend_per_share()` 的实现与注释不符：
+
+```python
+# 注释声称：按 EX_DIVIDEND_DATE 降序，第一条即最新
+for item in dividend_data:
+    if item.get("IMPLEMENT_STATUS") not in ("已实施", "实施"):
+        continue
+    ...
+    return float(dividend)      # ← 取列表第一条
+```
+
+但实测 `akshare.stock_dividend_cninfo` 返回的是**升序**（最老在前）：
+
+```
+2004-06-01  0.0900   ← 代码以为是"最新"
+2005-05-24  0.2100
+...
+2026-07-17  0.7900   ← 真正的最近一期
+```
+
+### 影响面（修复前的实测值）
+
+| 代码 | 名称 | 修复前 | 修复后 | 低估倍数 |
+|---|---|---|---|---|
+| 000538 | 云南白药 | 0.10 % | 5.03 % | 50× |
+| 600036 | 招商银行 | 0.28 % | 4.71 % | 17× |
+| 600900 | 长江电力 | 0.31 % | 3.40 % | 11× |
+| 002714 | 牧原股份 | 0.56 % | 3.24 % | 6× |
+
+ETF 未受影响 —— 其 TTM 走的是按日期过滤的 `_sum_trailing_12m()`。
+
+### 修复
+
+1. `fetch_latest_dividend_per_share` → 重命名为 `fetch_ttm_dividend_per_share`，
+   个股与 ETF **统一**走 `_sum_trailing_12m()`（按日期过滤，与返回顺序无关）
+2. 新增 `tests/test_ttm.py`（21 个用例），用**真实的 600900 26 期数据**做夹具，
+   锁死"必须取到 2026 年而不是 2004 年"，并覆盖升降序/乱序一致性、
+   12 个月边界、待实施、未来日期、无日期、空历史
+3. 修复后需**重新刷新一遍资产**，DB 里的旧值才会更新
+
+### 顺带修掉的测试脆弱性
+
+`conftest.py` 的 `mock_dividend` 原先用写死的 `date(2025,6,15)` / `date(2024,6,15)`，
+一旦系统日期推进到 2026-10 之后，两期都掉出 12 个月窗口，TTM 会算成 0 —— 夹具本身
+有时间脆弱性。现改为"相对今天"构造数据。
+
+### 教训
+
+> **不要假设第三方接口的返回顺序。** 任何"取最新 / 取第一条"的写法都必须显式排序，
+> 或者像本修复一样改成**按业务条件（日期区间）过滤**，让逻辑与顺序解耦。
+

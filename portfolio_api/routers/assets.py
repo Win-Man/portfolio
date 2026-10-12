@@ -11,7 +11,6 @@ from config import settings
 from database import get_db
 from market import (
     guess_asset_type,
-    is_etf,
     market_code as build_market_code,
     normalize_code,
 )
@@ -55,11 +54,19 @@ def _parse_dividend_date(value) -> "date | None":
 
 
 def _sum_trailing_12m(dividend_data: List[dict], *, today: "date | None" = None) -> float:
-    """滚动 12 个月（TTM）每股分红合计。
+    """滚动 12 个月（TTM）每股分红合计 —— 个股与 ETF **统一口径**。
 
-    用于 ETF：红利 ETF 多为**月度分红**，若只取"最近一次"会严重低估股息率。
-        561580 最近一次月分红 0.005 → 单期口径 0.39%
-        近 12 个月合计     约 0.095 → 正确口径 7.4%
+    只累加「已实施」且除权日在 [today-365d, today] 区间内的分红。
+
+    为什么不能"取最近一次"：
+      - 个股：`akshare.stock_dividend_cninfo` 返回的是**升序**（最老在前）。
+        早期实现按"降序、第一条即最新"的假设直接取 `data[0]`，结果取到了
+        2004 年的分红（长江电力 0.09 而非 2026 年的 0.79），TTM 收益率被
+        低估 5~50 倍。
+      - ETF：红利 ETF 多为月度分红，单期金额远小于 12 个月合计
+        （561580 单期 0.005 → 0.39%，12 个月合计 0.095 → 7.39%）。
+
+    本函数**按日期过滤**，与数据源返回顺序无关。
     """
     today = today or datetime.now(timezone.utc).date()
     cutoff = today - timedelta(days=365)
@@ -68,38 +75,25 @@ def _sum_trailing_12m(dividend_data: List[dict], *, today: "date | None" = None)
         if item.get("IMPLEMENT_STATUS") not in ("已实施", "实施"):
             continue
         d = _parse_dividend_date(item.get("EX_DIVIDEND_DATE"))
+        # 无日期、超出 12 个月、或未来的（已公告未除权）都不计入
         if d is None or d < cutoff or d > today:
             continue
         total += float(item.get("DIVIDEND_PER_SHARE") or 0)
     return round(total, 6)
 
 
-async def fetch_latest_dividend_per_share(stock_code: str) -> float:
-    """获取用于计算股息率的每股分红金额。
+async def fetch_ttm_dividend_per_share(stock_code: str) -> float:
+    """获取用于计算 TTM 股息率的每股分红金额（滚动 12 个月合计）。
 
-    - 个股：取最近一次已实施的分红（原有行为）
-    - ETF/基金：取**滚动 12 个月合计**（月度分红 ETF 用单期会严重低估股息率）
+    个股与 ETF 使用**同一口径**，不依赖数据源返回顺序。
+
+    历史沿革：此函数原名 `fetch_latest_dividend_per_share`，对个股走的是
+    "取列表第一条"的错误逻辑（假设降序，实际 akshare 返回升序）。
     """
     dividend_data = await fetch_dividend_from_eastmoney(stock_code)
     if not dividend_data:
         return 0.0
-
-    if is_etf(stock_code):
-        return _sum_trailing_12m(dividend_data)
-
-    # 个股：取最近一次已实施的分红（按 EX_DIVIDEND_DATE 降序，第一条即最新）
-    for item in dividend_data:
-        # 只取已实施的分红
-        if item.get("IMPLEMENT_STATUS") not in ("已实施", "实施"):
-            continue
-        dividend = item.get("DIVIDEND_PER_SHARE")
-        if dividend is not None and float(dividend) > 0:
-            return float(dividend)
-
-    # 如果没有已实施的，返回第一条
-    first = dividend_data[0]
-    dividend = first.get("DIVIDEND_PER_SHARE")
-    return float(dividend) if dividend else 0.0
+    return _sum_trailing_12m(dividend_data)
 
 
 async def fetch_real_time_price(stock_code: str, current_price: float = 0, dividend_per_share: float = 0) -> dict:
@@ -257,8 +251,8 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
     if not db_asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    # 1. 获取最新每股分红
-    dividend_per_share = await fetch_latest_dividend_per_share(db_asset.code)
+    # 1. 获取 TTM（滚动 12 个月）每股分红
+    dividend_per_share = await fetch_ttm_dividend_per_share(db_asset.code)
 
     # 2. 获取实时价格（可能 real / mock）
     price_data = await fetch_real_time_price(db_asset.code, dividend_per_share=dividend_per_share)
@@ -301,7 +295,7 @@ async def refresh_all_prices(portfolio_id: int, db: Session = Depends(get_db)):
     # 把每只资产的处理逻辑提到一个独立协程，外面统一 gather
     async def refresh_one(asset: Asset) -> dict:
         try:
-            dividend_per_share = await fetch_latest_dividend_per_share(asset.code)
+            dividend_per_share = await fetch_ttm_dividend_per_share(asset.code)
             price_data = await fetch_real_time_price(asset.code, dividend_per_share=dividend_per_share)
             if price_data["success"]:
                 source = price_data["source"]
