@@ -123,25 +123,50 @@ function generateMockDividendHistory(code, name) {
 }
 
 /**
+ * 判断代码是否为 ETF / 基金
+ * 沪市：5 开头（510xxx/511xxx/512~517xxx/560~563xxx/588xxx）
+ * 深市：15xxxx（ETF）、16xxxx（LOF）、18xxxx（封闭式）
+ */
+export function isEtfCode(code) {
+  if (!code) return false
+  const c = String(code).trim().replace(/^(sh|sz)/i, '')
+  if (!/^\d+$/.test(c)) return false
+  if (c.startsWith('5')) return true
+  if (/^(15|16|18)/.test(c)) return true
+  return false
+}
+
+/**
  * 根据代码识别市场（沪市/深市）
+ * 与后端 market.py 保持一致的规则
  */
 export function identifyMarket(code) {
   if (!code) return '未知'
-  
-  const firstDigit = code.charAt(0)
-  
-  // 沪市：6开头（上交所）、7开头（退市、ETF等）
-  if (firstDigit === '6' || firstDigit === '7') {
+
+  const c = String(code).trim().replace(/^(sh|sz)/i, '')
+  const firstDigit = c.charAt(0)
+
+  // 沪市：5（基金/ETF）、6（主板/科创板）、9（B股）
+  if (['5', '6', '9'].includes(firstDigit)) {
     return '沪市'
   }
-  
-  // 深市：0、2、3开头
-  // 0：深圳主板
-  // 2：创业板（2020年前）
-  // 3：创业板（2020年后）
-  if (['0', '2', '3'].includes(firstDigit)) {
+
+  // 深市：0（主板）、1（基金/ETF/债券）、2（B股）、3（创业板）
+  if (['0', '1', '2', '3'].includes(firstDigit)) {
     return '深市'
   }
-  
+
+  // 北交所：4、8 开头
+  if (['4', '8'].includes(firstDigit)) {
+    return '北交所'
+  }
+
   return '未知'
+}
+
+/**
+ * 推断资产类型（与后端保持一致）
+ */
+export function guessAssetType(code) {
+  return isEtfCode(code) ? 'ETF' : '股票'
 }

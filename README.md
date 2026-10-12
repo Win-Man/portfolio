@@ -11,10 +11,15 @@ portfolio/
 ## 功能
 
 - 多个「投资组合」管理（增删改）
-- 每个组合下挂若干资产（股票）：持仓数量、当前价、每股分红、TTM 收益率等
-- 一键拉取实时行情（腾讯）+ 历史分红（东方财富 via akshare）
+- 每个组合下挂若干资产：持仓数量、当前价、每股分红、TTM 股息率等
+- **支持个股与 ETF / LOF / 封闭式基金**
+  - 个股：`0`/`3`/`6`/`9` 开头，分红取最近一次已实施
+  - ETF（如 `561580` 央企红利ETF）：`5`/`15`/`16`/`18` 开头，红利 ETF 多为**月度分红**，TTM 按**近 12 个月合计**计算
+- 一键拉取实时行情（腾讯）+ 历史分红（个股走 cninfo，ETF 走 sina，均经 akshare）
 - 加权 TTM 收益率、预计年收入、资产明细展示
 - 历年分红展开表、按字段排序
+
+> 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
 
 ## 环境要求
 
@@ -75,15 +80,16 @@ npm run preview  # 预览生产构建
 
 | 数据 | 来源 | 备注 |
 |---|---|---|
-| 股票代码表（搜索用） | akshare | 全量缓存到 `stock_cache.json` |
+| 标的代码表（搜索用） | akshare | 个股 `stock_info_a_code_name` + ETF/LOF/封基 `fund_etf_category_sina`，合并缓存到 `stock_cache.json`（约 7 700 条） |
 | 实时价格 | 腾讯行情 `qt.gtimg.cn` | 失败时返回模拟价格并标记 `source=mock` |
-| 历史分红 | akshare `stock_dividend_cninfo` | 字段名按 akshare 当前版本硬编码 |
+| 个股历史分红 | akshare `stock_dividend_cninfo` | 字段名按 akshare 当前版本硬编码 |
+| ETF 历史分红 | akshare `fund_etf_dividend_sina` | 返回**累计分红**，代码内做相邻差分还原每期金额 |
 
 `source` 字段约定（参见 `schemas.AssetResponse`）：
 
 - `real`：腾讯行情返回的真实价
 - `mock`：网络失败时的兜底价（前端应高亮提示）
-- `stale`：> 30 分钟未刷新（计划中）
+- `stale`：尚未刷新过价格
 
 ## 重置数据
 
@@ -107,14 +113,20 @@ rm portfolio_api/portfolio.db portfolio_api/stock_cache.json
 
 ```
 portfolio_api/
-├── main.py             # FastAPI 入口 + 种子数据
+├── main.py             # FastAPI 入口 + 种子数据 + /health
+├── config.py           # pydantic-settings 配置（.env）
 ├── database.py         # SQLAlchemy
 ├── models.py           # ORM
 ├── schemas.py          # Pydantic
+├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── routers/
 │   ├── portfolios.py   # 组合 CRUD + summary
-│   ├── assets.py       # 资产 CRUD + 刷新价格
-│   └── stocks.py       # 搜索 / 价格 / 分红
+│   ├── assets.py       # 资产 CRUD + 刷新价格 + TTM 计算
+│   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派）
+├── tests/
+│   ├── conftest.py
+│   ├── test_api.py     # 通用 API 测试
+│   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
 portfolio_web/
@@ -127,18 +139,26 @@ portfolio_web/
     │   ├── AssetList.vue
     │   ├── AssetItem.vue
     │   ├── AssetForm.vue
+    │   ├── Toast.vue
     │   └── InfoTooltip.vue
+    ├── composables/
+    │   └── useToast.js
     ├── api/
     │   ├── portfolio.js
     │   └── stock.js
     └── styles/main.css
 ```
 
+## 测试
+
+```bash
+cd portfolio_api
+uv run pytest -q          # 60 个用例，含 ETF 专项
+```
+
 ## 待办
 
-详见每次代码评审记录。优先项：
-
 - 数据库迁移机制（Alembic）
-- 真假价格视觉区分（已加 `source` 字段，待前端完善）
-- 测试覆盖（pytest + vitest）
+- 测试覆盖（前端 vitest）
 - 用户认证（多用户之前必须加）
+- ETF 分红面板的「年均每股分红」对月度分红标的语义失真

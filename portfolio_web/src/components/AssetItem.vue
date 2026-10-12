@@ -3,6 +3,11 @@
     <td @click="toggleExpand" class="expandable-cell">
       <span class="expand-icon">{{ isExpanded ? '▼' : '▶' }}</span>
       {{ asset.name }}
+      <span
+        v-if="asset.asset_type && asset.asset_type !== '股票'"
+        class="asset-type-badge"
+        :class="asset.asset_type === 'ETF' ? 'type-etf' : 'type-other'"
+      >{{ asset.asset_type }}</span>
     </td>
     <td @click="toggleExpand" class="expandable-cell">{{ asset.code }}</td>
     <td class="text-right">{{ formatNumber(asset.quantity) }}</td>
@@ -215,6 +220,31 @@ function formatNumber(num) {
   font-size: 10px;
   color: #999;
   margin-right: 4px;
+}
+
+/* 资产类型徽标（ETF 等非个股） */
+.asset-type-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  vertical-align: middle;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.type-etf {
+  background: #fff1e6;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.type-other {
+  background: #eef2f8;
+  color: #475569;
+  border: 1px solid #cbd5e1;
 }
 
 /* 价格来源 badge：实时 / 模拟 / 未刷新 */

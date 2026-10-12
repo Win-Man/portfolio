@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -7,35 +7,87 @@ import asyncio
 import httpx
 import re
 
+from config import settings
 from database import get_db
+from market import (
+    guess_asset_type,
+    is_etf,
+    market_code as build_market_code,
+    normalize_code,
+)
 from models import Asset, Portfolio
 from schemas import AssetCreate, AssetUpdate, AssetResponse
 from routers.stocks import fetch_dividend_from_eastmoney, invalidate_dividend_cache
 
 router = APIRouter(prefix="/api", tags=["assets"])
 
-# 腾讯股票行情API
-TENCENT_STOCK_URL = "https://qt.gtimg.cn/q"
+# 腾讯股票行情API（可在 .env 里用 TENCENT_QUOTE_URL 覆盖）
+TENCENT_STOCK_URL = settings.tencent_quote_url
 
 
 def get_tencent_market_code(stock_code: str) -> str:
-    """根据股票代码判断市场前缀
-    上海: sh
-    深圳: sz
+    """根据代码返回行情代码（如 sh561580）。
+
+    规则集中在 market.py —— 支持个股与 ETF/基金。
+    旧实现是"6/9 → sh，其它 → sz"，会把 ETF 561580 错判成 sz561580。
     """
-    if stock_code.startswith('6') or stock_code.startswith('9'):
-        return f"sh{stock_code}"  # 上海
-    else:
-        return f"sz{stock_code}"  # 深圳
+    return build_market_code(stock_code)
+
+
+def _parse_dividend_date(value) -> "date | None":
+    """把分红日期解析成 date 对象。支持 date / 'YYYY-MM-DD' / 'YYYYMMDD' / 空。"""
+    if value is None:
+        return None
+    if hasattr(value, "date") and not isinstance(value, str):
+        try:
+            return value.date() if hasattr(value, "date") else value
+        except Exception:
+            return None
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _sum_trailing_12m(dividend_data: List[dict], *, today: "date | None" = None) -> float:
+    """滚动 12 个月（TTM）每股分红合计。
+
+    用于 ETF：红利 ETF 多为**月度分红**，若只取"最近一次"会严重低估股息率。
+        561580 最近一次月分红 0.005 → 单期口径 0.39%
+        近 12 个月合计     约 0.095 → 正确口径 7.4%
+    """
+    today = today or datetime.now(timezone.utc).date()
+    cutoff = today - timedelta(days=365)
+    total = 0.0
+    for item in dividend_data:
+        if item.get("IMPLEMENT_STATUS") not in ("已实施", "实施"):
+            continue
+        d = _parse_dividend_date(item.get("EX_DIVIDEND_DATE"))
+        if d is None or d < cutoff or d > today:
+            continue
+        total += float(item.get("DIVIDEND_PER_SHARE") or 0)
+    return round(total, 6)
 
 
 async def fetch_latest_dividend_per_share(stock_code: str) -> float:
-    """从东方财富获取最新每股分红金额"""
+    """获取用于计算股息率的每股分红金额。
+
+    - 个股：取最近一次已实施的分红（原有行为）
+    - ETF/基金：取**滚动 12 个月合计**（月度分红 ETF 用单期会严重低估股息率）
+    """
     dividend_data = await fetch_dividend_from_eastmoney(stock_code)
     if not dividend_data:
         return 0.0
-    
-    # 取最近一次已实施的分红（按 EX_DIVIDEND_DATE 降序，第一条即最新）
+
+    if is_etf(stock_code):
+        return _sum_trailing_12m(dividend_data)
+
+    # 个股：取最近一次已实施的分红（按 EX_DIVIDEND_DATE 降序，第一条即最新）
     for item in dividend_data:
         # 只取已实施的分红
         if item.get("IMPLEMENT_STATUS") not in ("已实施", "实施"):
@@ -43,7 +95,7 @@ async def fetch_latest_dividend_per_share(stock_code: str) -> float:
         dividend = item.get("DIVIDEND_PER_SHARE")
         if dividend is not None and float(dividend) > 0:
             return float(dividend)
-    
+
     # 如果没有已实施的，返回第一条
     first = dividend_data[0]
     dividend = first.get("DIVIDEND_PER_SHARE")
@@ -146,7 +198,16 @@ def create_asset(portfolio_id: int, asset: AssetCreate, db: Session = Depends(ge
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
-    db_asset = Asset(portfolio_id=portfolio_id, **asset.model_dump())
+    payload = asset.model_dump()
+    code = payload.get("code", "")
+    # 未显式指定 asset_type 时，按代码推断（5xxxxx/1xxxxx → ETF）
+    # 显式传了就尊重用户选择
+    if "asset_type" not in asset.model_fields_set:
+        payload["asset_type"] = guess_asset_type(code)
+    # 规整代码（去掉可能带的 sh/sz 前缀）
+    payload["code"] = normalize_code(code)
+
+    db_asset = Asset(portfolio_id=portfolio_id, **payload)
     db.add(db_asset)
     db.commit()
     db.refresh(db_asset)
@@ -168,6 +229,8 @@ def update_asset(asset_id: int, asset: AssetUpdate, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Asset not found")
 
     update_data = asset.model_dump(exclude_unset=True)
+    if "code" in update_data and update_data["code"]:
+        update_data["code"] = normalize_code(update_data["code"])
     for key, value in update_data.items():
         setattr(db_asset, key, value)
 

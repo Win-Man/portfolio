@@ -10,12 +10,12 @@
         <div class="modal-body">
           <!-- 股票搜索区域（仅新增时显示） -->
           <div v-if="!isEdit" class="search-section">
-            <label>🔍 搜索股票</label>
+            <label>🔍 搜索股票 / ETF</label>
             <div class="search-box">
               <input 
                 v-model="searchKeyword" 
                 type="text" 
-                placeholder="输入股票代码或名称搜索..."
+                placeholder="输入代码或名称搜索（支持 ETF，如 561580）"
                 @input="handleSearchInput"
                 class="search-input"
               />
@@ -31,12 +31,16 @@
                 >
                   <span class="stock-code">{{ stock.code }}</span>
                   <span class="stock-name">{{ stock.name }}</span>
+                  <span
+                    class="stock-type"
+                    :class="stock.type === 'ETF' ? 'type-etf' : 'type-stock'"
+                  >{{ stock.type || '股票' }}</span>
                   <span class="stock-market">{{ stock.market }}</span>
                 </div>
               </div>
               
               <div v-if="searched && searchResults.length === 0 && !searching" class="search-empty">
-                未找到匹配的股票，请手动输入
+                未找到匹配的标的，请手动输入
               </div>
             </div>
             
@@ -46,22 +50,22 @@
           </div>
           
           <div class="form-group">
-            <label>股票名称 *</label>
+            <label>名称 *</label>
             <input 
               v-model="form.name" 
               type="text" 
-              placeholder="例如：招商银行"
+              placeholder="例如：招商银行 / 央企红利ETF"
               required
             />
             <div v-if="errors.name" class="error">{{ errors.name }}</div>
           </div>
           
           <div class="form-group">
-            <label>股票代码 *</label>
+            <label>代码 *</label>
             <input 
               v-model="form.code" 
               type="text" 
-              placeholder="例如：600036"
+              placeholder="例如：600036 / 561580"
               required
             />
             <div v-if="errors.code" class="error">{{ errors.code }}</div>
@@ -148,7 +152,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { searchStocks, getStockPrice } from '../api/stock.js'
+import { searchStocks, getStockPrice, guessAssetType } from '../api/stock.js'
 import { toast } from '../composables/useToast.js'
 
 const props = defineProps({
@@ -176,6 +180,7 @@ let searchTimeout = null
 const form = ref({
   name: '',
   code: '',
+  asset_type: '股票',
   quantity: null,
   price: null,
   dividend_per_share: null,
@@ -187,11 +192,13 @@ const errors = ref({})
 
 watch(() => props.asset, (newAsset) => {
   if (newAsset) {
-    form.value = { ...newAsset }
+    // 编辑已有资产：补齐可能缺失的 asset_type
+    form.value = { asset_type: guessAssetType(newAsset.code), ...newAsset }
   } else {
     form.value = {
       name: '',
       code: '',
+      asset_type: '股票',
       quantity: null,
       price: null,
       dividend_per_share: null,
@@ -205,6 +212,13 @@ watch(() => props.asset, (newAsset) => {
   searchResults.value = []
   searched.value = false
 }, { immediate: true })
+
+// 资产类型跟随代码自动识别：手动输入 561580 也会变成 ETF
+watch(() => form.value.code, (code) => {
+  if (code) {
+    form.value.asset_type = guessAssetType(code)
+  }
+})
 
 const calculatedTTM = computed(() => {
   if (form.value.price > 0 && form.value.dividend_per_share > 0) {
@@ -262,6 +276,8 @@ function handleSearchInput() {
 async function selectStock(stock) {
   form.value.code = stock.code
   form.value.name = stock.name
+  // 带上资产类型（ETF / 股票），后端也会按代码兜底推断
+  form.value.asset_type = stock.type || guessAssetType(stock.code)
   searchKeyword.value = ''
   searchResults.value = []
   searched.value = false
@@ -413,6 +429,27 @@ function handleSubmit() {
 .stock-name {
   flex: 1;
   color: #666;
+}
+
+/* 资产类型徽标：ETF 用醒目色以区分个股 */
+.stock-type {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+.type-stock {
+  background: #eef2f8;
+  color: #475569;
+}
+
+.type-etf {
+  background: #fff1e6;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+  font-weight: 600;
 }
 
 .stock-market {

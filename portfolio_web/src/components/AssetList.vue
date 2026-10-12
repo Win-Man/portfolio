@@ -27,7 +27,7 @@
         <thead>
           <tr>
             <th @click="sortBy('name')">
-              股票名称 <span class="sort-icon">{{ getSortIcon('name') }}</span>
+              名称 <span class="sort-icon">{{ getSortIcon('name') }}</span>
             </th>
             <th @click="sortBy('code')">
               代码 <span class="sort-icon">{{ getSortIcon('code') }}</span>
