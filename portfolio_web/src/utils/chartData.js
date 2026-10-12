@@ -1,0 +1,106 @@
+/**
+ * 饼图数据整理
+ *
+ * 从后端已算好的字段聚合出可绘制的扇区：
+ *   holding_value          = quantity × price
+ *   expected_annual_income = quantity × dividend_per_share
+ *
+ * 纯函数，便于单测（见 src/utils/chartData.test.mjs）。
+ */
+
+/** 占比低于此值且项数过多时合并为「其他」 */
+export const DEFAULT_MIN_SHARE = 2
+/** 超过此扇区数才启用合并 */
+export const DEFAULT_MAX_SLICES = 8
+
+export const MISC_LABEL = '其他'
+
+/**
+ * 把资产数组聚合成 [{name, value}]。
+ * 同名标的合并（用户可能重复录入同一只股票）。
+ */
+export function aggregateAssets(assets, pick) {
+  const acc = new Map()
+  for (const a of assets || []) {
+    const name = (a && (a.name || a.code)) || '未命名'
+    const value = Number(pick(a)) || 0
+    acc.set(name, (acc.get(name) || 0) + value)
+  }
+  return [...acc.entries()].map(([name, value]) => ({ name, value }))
+}
+
+/**
+ * 生成扇区列表。
+ *
+ * - 过滤掉 value <= 0 的项（饼图无法绘制 0 值扇区，图例也会显得杂乱）
+ * - 按 value 降序排列
+ * - 仅当项数 > maxSlices 时，把占比 < minShare 的合并为「其他 (N 项)」
+ *   （合并后若「其他」只剩 1 项被吞并，则放弃合并，避免出现只有一个成员的聚合）
+ * - 每项附带 percent（占比，0~100）
+ */
+export function buildSlices(items, options = {}) {
+  const maxSlices = options.maxSlices ?? DEFAULT_MAX_SLICES
+  const minShare = options.minShare ?? DEFAULT_MIN_SHARE
+
+  const positive = (items || [])
+    .map((d) => ({ name: String(d.name ?? ''), value: Number(d.value) || 0 }))
+    .filter((d) => d.value > 0)
+    .sort((a, b) => b.value - a.value)
+
+  if (positive.length === 0) return []
+
+  const sum = positive.reduce((s, d) => s + d.value, 0)
+  const withPercent = (list) =>
+    list.map((d) => ({ ...d, percent: sum ? (d.value / sum) * 100 : 0 }))
+
+  if (positive.length <= maxSlices) return withPercent(positive)
+
+  const main = []
+  const misc = []
+  for (const d of positive) {
+    if ((d.value / sum) * 100 < minShare) misc.push(d)
+    else main.push(d)
+  }
+  if (misc.length < 2) return withPercent(positive)
+
+  const miscValue = misc.reduce((s, d) => s + d.value, 0)
+  return withPercent([
+    ...main,
+    {
+      name: `${MISC_LABEL} (${misc.length} 项)`,
+      value: miscValue,
+      isMisc: true,
+    },
+  ])
+}
+
+/**
+ * 计算共享颜色映射的顺序：按「持仓市值」降序作为基准，
+ * 保证两张图的颜色分配顺序一致。
+ */
+export function stableNameOrder(assets, primaryPick) {
+  const agg = aggregateAssets(assets, primaryPick).filter((d) => d.value > 0)
+  return agg.sort((a, b) => b.value - a.value).map((d) => d.name)
+}
+
+/** 数字格式化：≥1万 用「万」，否则千分位 */
+export function formatCompact(num) {
+  if (num == null || Number.isNaN(num)) return '0'
+  if (Math.abs(num) >= 10000) return (num / 10000).toFixed(2) + '万'
+  if (Math.abs(num) >= 1000) return Number(num).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+  return Number(num).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+}
+
+/** 数字格式化：精确到分，带千分位 */
+export function formatExact(num) {
+  return Number(num || 0).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+/** 名称截断 */
+export function truncate(name, max = 9) {
+  const s = String(name ?? '')
+  return s.length > max ? s.slice(0, max) + '…' : s
+}

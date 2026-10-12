@@ -8,7 +8,7 @@
       <div class="overview-item">
         <div class="label">资产数量</div>
         <div class="value">{{ summary?.asset_count || 0 }}</div>
-        <div class="sub">只股票</div>
+        <div class="sub">项标的</div>
       </div>
       <div class="overview-item highlight">
         <div class="label">

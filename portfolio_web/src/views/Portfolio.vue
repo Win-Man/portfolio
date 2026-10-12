@@ -17,7 +17,9 @@
     <main class="container">
       <div v-if="loadingSummary" class="loading">加载汇总数据...</div>
       <PortfolioOverview v-else :summary="summary" />
-      
+
+      <PortfolioCharts :assets="assets" />
+
       <AssetList 
         :assets="assets" 
         :loading="loadingAssets"
@@ -40,7 +42,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, defineAsyncComponent } from 'vue'
 import PortfolioOverview from '../components/PortfolioOverview.vue'
 import AssetList from '../components/AssetList.vue'
 import AssetForm from '../components/AssetForm.vue'
@@ -55,6 +57,11 @@ import {
   refreshAssetPrice,
   refreshAllPrices
 } from '../api/portfolio.js'
+
+// 图表依赖 echarts（约 460KB），异步加载避免拖慢首屏与主包体积
+const PortfolioCharts = defineAsyncComponent(
+  () => import('../components/PortfolioCharts.vue')
+)
 
 const portfolios = ref([])
 const selectedPortfolioId = ref(null)
