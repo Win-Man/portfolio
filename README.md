@@ -22,6 +22,11 @@ portfolio/
   - **支持负成本**（分红 / 高抛低吸后摊薄成本转负，A 股常见）；成本 ≤ 0 时盈亏比例不适用，只展示金额
   - 盈亏配色遵循 A 股惯例：**红涨绿跌**
 - **持仓分布可视化**：持仓市值分布 + 预计年收入分布两张饼图（实心，饼图下方附 TOP5 图例，悬浮查看任一项明细），同一标的跨图同色，便于对照股息效率
+- **年收入目标**：每个组合可维护多个「年收入目标」（目标名称 + 目标年收入，单位元），选中目标后展示：
+  - 当前（年 / 月均）与目标（年 / 月均）、缺口、进度条、达成 / 超额状态
+  - 路径 ①：收益率不变，**还需再投入多少本金**（默认按组合加权 TTM 收益率，可手填「假设加仓收益率」覆盖，不持久化）
+  - 路径 ②：本金不变，**TTM 收益率需要达到多少**（口径为「年收入 ÷ 持仓市值」，**不是**加权 TTM，UI 有 tooltip 说明差异）
+  - 目标绑定组合（切换组合只看该组合的目标、删除组合级联删除目标）；同组合内重名返回 409；「上次选中的目标」按组合记在 localStorage，手填的假设收益率不记
 - **列表可自定义**：「列设置」勾选要显示的列；拖动表头调整列顺序；拖动列边界调整宽度（双击复位）；三项设置都持久化到浏览器
 - 历年分红展开表（含 24 / 25 / 26 年每股分红列）、按字段排序
 
@@ -82,6 +87,25 @@ npm run build    # 生产构建到 dist/
 npm run preview  # 预览生产构建
 ```
 
+## API 概览
+
+交互文档见 http://localhost:8000/docs 。金额单位一律「元」，收益率为百分数（`4.5` = 4.5%）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET / POST | `/api/portfolios` | 组合列表 / 新增 |
+| PUT / DELETE | `/api/portfolios/{pid}` | 组合改名 / 删除（级联删除其资产与目标） |
+| GET | `/api/portfolios/{pid}/summary` | 组合汇总（总市值、加权 TTM 收益率、预计年收入、成本盈亏） |
+| GET / POST | `/api/portfolios/{pid}/assets` | 资产列表 / 新增 |
+| PUT / DELETE | `/api/assets/{aid}` | 资产更新 / 删除 |
+| POST | `/api/assets/{aid}/refresh-price`、`/api/portfolios/{pid}/assets/refresh-all-prices` | 刷新实时价格 |
+| **GET / POST** | **`/api/portfolios/{pid}/goals`** | **年收入目标列表（created_at ASC, id ASC）/ 新增（201）；同组合重名 409** |
+| **PUT / DELETE** | **`/api/goals/{gid}`** | **目标更新（部分更新语义）/ 删除** |
+| **GET** | **`/api/portfolios/{pid}/goals/{gid}/progress?assumed_yield=4.5`** | **目标进度：当前 / 目标年收入与月均、缺口、进度、两条达成路径；`assumed_yield` 为可选假设加仓收益率（百分数，`0–100`，省略则取组合加权 TTM）** |
+
+目标接口的错误约定：组合不存在 → `404 Portfolio not found`；目标不存在或不属于该组合 → `404 Goal not found`；名称为纯空白 / 金额 ≤ 0 / `assumed_yield` 越界 → `422`；同组合重名 → `409 同名目标已存在`。
+所有「无意义」的数值（如市值为 0 时的所需收益率）返回 `null` 而不是 `0`，前端显示「—」。
+
 ## 数据源说明
 
 | 数据 | 来源 | 备注 |
@@ -124,14 +148,17 @@ portfolio_api/
 ├── database.py         # SQLAlchemy
 ├── models.py           # ORM
 ├── schemas.py          # Pydantic
+├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记），summary 与目标进度共用
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── routers/
 │   ├── portfolios.py   # 组合 CRUD + summary
 │   ├── assets.py       # 资产 CRUD + 刷新价格 + TTM 计算
+│   ├── goals.py        # 年收入目标 CRUD + 进度计算
 │   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派）
 ├── tests/
 │   ├── conftest.py
 │   ├── test_api.py     # 通用 API 测试
+│   ├── test_goals.py   # 年收入目标：CRUD / 校验 / 归属 / 级联 / 进度口径
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
@@ -144,21 +171,26 @@ portfolio_web/
     ├── views/Portfolio.vue
     ├── components/
     │   ├── PortfolioOverview.vue
+    │   ├── PortfolioGoals.vue    # ★ 年收入目标区块（进度条 / 两条路径 / 假设收益率）
     │   ├── PortfolioCharts.vue   # 两张分布饼图（容器）
     │   ├── ChartPie.vue          # 可复用饼图组件（ECharts 封装）
     │   ├── AssetList.vue
     │   ├── AssetItem.vue
     │   ├── AssetForm.vue
+    │   ├── GoalForm.vue          # 目标的新增 / 编辑弹窗
     │   ├── Toast.vue
     │   └── InfoTooltip.vue
     ├── utils/
     │   ├── chartData.js          # 饼图数据整理（纯函数 + 单测）
     │   ├── chartData.test.mjs
+    │   ├── goal.js               # 目标展示纯函数（月均 / 进度宽度 / 记忆选中）
+    │   ├── goal.test.mjs
     │   └── chartColors.js        # 跨图共享配色
     ├── composables/
     │   └── useToast.js
     ├── api/
     │   ├── portfolio.js
+    │   ├── goal.js               # 目标接口（无假数据兜底，透传后端 detail）
     │   └── stock.js
     └── styles/main.css
 ```
@@ -166,10 +198,10 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：112 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效）
+# 后端：131 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例）
 cd portfolio_api && uv run pytest -q
 
-# 前端：40 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示）
+# 前端：58 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示纯函数 18 例）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）
