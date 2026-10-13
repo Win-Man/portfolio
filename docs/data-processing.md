@@ -74,6 +74,7 @@
 | `asset_type` | str | 用户填，默认"股票" | 资产类型（目前只有股票，预留扩展） |
 | `quantity` | float | 用户填 | 持股数量 |
 | `price` | float | 用户填 / 刷新时覆盖 | **最新价**（元/股） |
+| `cost_price` | float \| NULL | **用户填**，新增时未填则默认 = `price` | **每股成本**（建仓成本，元/股）。NULL = 未填 |
 | `dividend_per_share` | float | 用户填 / 刷新时覆盖 | 每股最近一次分红（**元/股**） |
 | `ttm_yield` | float | 用户填 / 刷新时覆盖 | TTM 股息率（**百分比数值**，如 3.38 表示 3.38%） |
 | `static_yield` | float | 用户填 | 静态股息率（同上） |
@@ -85,6 +86,8 @@
 > **关键约定**：
 > - `price` / `dividend_per_share` / `ttm_yield` 三个字段是**用户可能手动改的"权威值"**——也是**刷新接口会覆盖**的字段
 > - 价格刷新时，**只有 `source="real"` 才会覆盖 DB 里的 `price`**；`source="mock"` 只更新标记，不污染数据
+> - **`cost_price` 是历史事实，刷新接口永不改写它**（已用测试锁住）。它只在两种情况下被写入：
+>   ① 用户新增/编辑时显式填写；② 新增时未填 → 后端用当时的 `price` 兜底
 
 ---
 
@@ -98,11 +101,39 @@
 | 代码 | DB | 直接显示 `asset.code` |
 | 持股数量 | DB | 直接显示 `asset.quantity`（前端 `formatNumber` 加千分位） |
 | **最新价** + 价格 badge | DB | 直接显示 `asset.price`，后端给 `price_source_label` 渲染成 badge：实时/模拟/未刷新 |
-| **持仓市值** | **后端算** | `holding_value = quantity × price`（见 `schemas.py:79`） |
+| **成本** | DB | 直接显示 `asset.cost_price`（每股成本）。未填时前端显示「—」 |
+| **持仓市值** | **后端算** | `holding_value = quantity × price` |
+| **盈亏** | **后端算** | 见 § 3.0 |
 | 25年每股分红 | **后端算** | 见 § 3.3 |
 | 24年每股分红 | **后端算** | 见 § 3.3 |
 | **TTM 收益率** | DB | 直接显示 `asset.ttm_yield`（已经是百分比数值） |
 | 操作按钮 | — | UI 元素 |
+
+### 3.0 成本与盈亏
+
+**成本（`cost_price`）是每股建仓成本，人为填写**，规则：
+
+| 场景 | 行为 |
+|---|---|
+| 新增资产时填了成本 | 用填的值 |
+| 新增资产时**没填**（null / 空 / 0） | 后端用当时的 `price` 兜底 → 相当于「刚建仓」，盈亏为 0 |
+| 编辑资产 | 用 `exclude_unset`，不传则保留原值 |
+| **刷新价格（单只 / 批量）** | **绝不改写成本** —— 成本是历史事实，已用测试锁住 |
+
+盈亏由后端算出（`schemas.AssetResponse.from_orm_with_calc`），不落库：
+
+| 字段 | 公式 |
+|---|---|
+| `cost_value` | `quantity × cost_price`（持仓成本） |
+| `profit_amount` | `(price − cost_price) × quantity` |
+| `profit_percent` | `(price − cost_price) / cost_price × 100` |
+| `has_cost` | `cost_price is not None and cost_price > 0` |
+
+`has_cost = False` 时（成本为 NULL 或 0），三个数值字段一律返回 0，前端显示「—」。
+前端表单里成本默认跟随「最新价」自动填充，**一旦用户手动改过成本就不再覆盖**（见 `AssetForm.vue` 的 `costTouched`）。
+
+> ⚠ **配色是 A 股语义**：**红涨绿跌**，与欧美相反。盈利显示红色，亏损显示绿色。
+> 前端 `.profit-up` / `.profit-down` 与概览卡片底色均按此约定，代码里有注释标注，不要"顺手改成绿色盈利"。
 
 #### 价格 badge 的生成（`_source_to_label_hint`，`schemas.py:106`）
 
@@ -161,10 +192,18 @@
 |---|---|---|
 | **总市值** | `Σ (a.quantity × a.price)` | 完全 DB 字段，无外部依赖 |
 | **资产数量** | `len(assets)` | — |
+| **总盈亏** | `Σ (a.quantity × a.price) − Σ (a.quantity × a.cost_price)`，**只对已填成本的标的求和** | 见下方边界说明 |
 | **加权平均 TTM 收益率** | `Σ (a.quantity × a.price × a.ttm_yield) / Σ (a.quantity × a.price)` | 分子：每个资产的"市值×TTM"，分母：总市值。本质是按市值加权。**注意：DB 里的 ttm_yield 已经是百分比数值（3.38 = 3.38%），所以结果也是百分比数值**，前端再 `.toFixed(2) + '%'`。 |
 | **预计年收入** | `Σ (a.quantity × a.dividend_per_share)` | — |
 
-> **重要边界**：如果组合内没有任何资产，`weighted_ttm_yield = 0.0`（避免除零）。
+返回字段：`total_cost` / `total_profit` / `total_profit_percent` / `costed_asset_count`。
+
+> **重要边界**：
+> - 组合内无资产 → `weighted_ttm_yield = 0.0`（避免除零）
+> - **总盈亏只统计 `cost_price` 有值的标的**（`costed_asset_count` 记录参与计算的条数），
+>   否则成本未填的标的会被当成零成本，把总盈亏算得虚高
+> - `total_cost = 0` 时 `total_profit_percent = 0`（避免除零）
+
 
 ---
 
@@ -297,7 +336,22 @@
 
 ## 10. 一句话回答"数字哪来的"
 
-> **DB 存原子值（quantity / price / dividend_per_share / ttm_yield），后端在响应序列化时算汇总（holding_value / summary / y2024_y2025），前端在展示时做单位换算（万 / 百分号 / 千分位）。没有任何"计算结果"被持久化**。
+> **DB 存原子值（quantity / price / cost_price / dividend_per_share / ttm_yield），后端在响应序列化时算汇总（holding_value / 成本盈亏 / summary / y2024_y2025），前端在展示时做单位换算（万 / 百分号 / 千分位）。没有任何"计算结果"被持久化**。
+
+### 10.1 关于 `cost_price` 的迁移
+
+`cost_price` 是通过轻量迁移加的列，**回填只在该列本次新增时执行一次**：
+
+```python
+("assets", "cost_price", "FLOAT NULL",
+ "UPDATE assets SET cost_price = price WHERE cost_price IS NULL")
+```
+
+回填为**当时的现价**（等价于「假设刚建仓」，盈亏从 0 开始），用户之后按真实建仓成本逐条修正。
+
+之所以要"只在新增时回填"：若每次启动都跑这条 UPDATE，
+会把用户**手动清空成本**的操作覆盖掉。
+
 
 ---
 

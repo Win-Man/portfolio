@@ -30,6 +30,8 @@ class AssetBase(BaseModel):
     asset_type: str = "股票"
     quantity: float = 0
     price: float = 0
+    # 每股成本（建仓成本）。None = 未填；新增时后端会用 price 兜底
+    cost_price: Optional[float] = None
     # 这两个字段前端表单允许空着：null 让 Pydantic 用 0 兜底（接口契约更宽松）
     dividend_per_share: Optional[float] = 0
     ttm_yield: Optional[float] = 0
@@ -47,6 +49,7 @@ class AssetUpdate(BaseModel):
     asset_type: Optional[str] = None
     quantity: Optional[float] = None
     price: Optional[float] = None
+    cost_price: Optional[float] = None
     dividend_per_share: Optional[float] = None
     ttm_yield: Optional[float] = None
     static_yield: Optional[float] = None
@@ -62,6 +65,11 @@ class AssetResponse(AssetBase):
     created_at: datetime
     holding_value: float = 0
     expected_annual_income: float = 0
+    # 成本与盈亏（后端算，不落库）
+    cost_value: float = 0          # 持仓成本 = quantity × cost_price
+    profit_amount: float = 0       # 浮动盈亏 = (price − cost_price) × quantity
+    profit_percent: float = 0      # 盈亏比例 = (price − cost_price) / cost_price × 100
+    has_cost: bool = False         # 是否已填成本（未填时前端显示「—」）
     # 最近两年分红（从真实数据获取）
     y2025_dividend: float = 0  # 2025年每股分红
     y2024_dividend: float = 0  # 2024年每股分红
@@ -81,6 +89,15 @@ class AssetResponse(AssetBase):
         source = getattr(asset, "price_source", "stale") or "stale"
         fetched_at = getattr(asset, "price_fetched_at", None)
         label, hint = _source_to_label_hint(source, fetched_at)
+
+        cost_price = getattr(asset, "cost_price", None)
+        has_cost = cost_price is not None and cost_price > 0
+        cost_value = (asset.quantity * cost_price) if has_cost else 0.0
+        profit_amount = ((asset.price - cost_price) * asset.quantity) if has_cost else 0.0
+        profit_percent = (
+            (asset.price - cost_price) / cost_price * 100 if has_cost else 0.0
+        )
+
         return cls(
             id=asset.id,
             portfolio_id=asset.portfolio_id,
@@ -89,6 +106,7 @@ class AssetResponse(AssetBase):
             asset_type=asset.asset_type,
             quantity=asset.quantity,
             price=asset.price,
+            cost_price=cost_price,
             dividend_per_share=asset.dividend_per_share,
             ttm_yield=asset.ttm_yield,
             static_yield=asset.static_yield,
@@ -96,6 +114,10 @@ class AssetResponse(AssetBase):
             created_at=asset.created_at,
             holding_value=holding_value,
             expected_annual_income=expected_annual_income,
+            cost_value=cost_value,
+            profit_amount=profit_amount,
+            profit_percent=profit_percent,
+            has_cost=has_cost,
             price_source=source,
             price_fetched_at=fetched_at,
             price_source_label=label,
@@ -119,4 +141,9 @@ class PortfolioSummary(BaseModel):
     asset_count: int
     weighted_ttm_yield: float
     expected_annual_income: float
+    # 成本与盈亏汇总（只统计已填成本的标的）
+    total_cost: float = 0
+    total_profit: float = 0
+    total_profit_percent: float = 0
+    costed_asset_count: int = 0
     description: str = "基于当前持股计算的汇总数据"

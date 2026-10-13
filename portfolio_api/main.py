@@ -29,21 +29,36 @@ def run_lightweight_migrations():
     """轻量迁移：SQLAlchemy 的 create_all 不会 ALTER 已有表，
     启动时检查并补齐缺失的列（幂等，重复执行安全）。
     长期建议接入 Alembic。
+
+    每项为 (表, 列, DDL, 回填 SQL 或 None)。
+    回填**只在列是本次新增时**执行一次 —— 若每次启动都跑，
+    会覆盖用户手动清空的成本值。
     """
     migrations = [
-        ("assets", "note", "VARCHAR DEFAULT ''"),
-        ("assets", "price_source", "VARCHAR DEFAULT 'stale'"),
-        ("assets", "price_fetched_at", "TIMESTAMP NULL"),
+        ("assets", "note", "VARCHAR DEFAULT ''", None),
+        ("assets", "price_source", "VARCHAR DEFAULT 'stale'", None),
+        ("assets", "price_fetched_at", "TIMESTAMP NULL", None),
+        # 成本列：存量资产的成本未知，按「未填则默认=当前价」的规则回填现价，
+        # 之后由用户按实际建仓成本逐条修正
+        (
+            "assets",
+            "cost_price",
+            "FLOAT NULL",
+            "UPDATE assets SET cost_price = price WHERE cost_price IS NULL",
+        ),
     ]
     with engine.begin() as conn:
-        for table, column, ddl in migrations:
+        for table, column, ddl, backfill in migrations:
             # pragma_table_info 的参数是标识符而非值，直接字符串拼接；table/column 来自白名单，安全
             rows = conn.execute(
                 text(f"SELECT 1 FROM pragma_table_info('{table}') WHERE name='{column}'")
             ).fetchone()
             if not rows:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
-                logging.info("migration: added %s.%s", table, column)
+                logger.info("migration: added %s.%s", table, column)
+                if backfill:
+                    conn.execute(text(backfill))
+                    logger.info("migration: backfilled %s.%s", table, column)
 
 
 run_lightweight_migrations()

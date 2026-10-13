@@ -30,7 +30,22 @@
         {{ refreshing ? '...' : '↻' }}
       </button>
     </td>
+    <td class="text-right">
+      <template v-if="asset.has_cost">¥{{ formatPrice(asset.cost_price) }}</template>
+      <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
+    </td>
     <td class="text-right">¥{{ formatNumber(asset.holding_value) }}</td>
+    <td class="text-right">
+      <template v-if="asset.has_cost">
+        <div class="profit-cell" :class="profitClass">
+          {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatNumber(Math.abs(asset.profit_amount)) }}
+        </div>
+        <div class="profit-pct" :class="profitClass">
+          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ (asset.profit_percent || 0).toFixed(2) }}%
+        </div>
+      </template>
+      <span v-else class="muted" title="未填成本，无法计算盈亏">—</span>
+    </td>
     <td class="text-right">¥{{ (asset.y2025_dividend || 0).toFixed(2) }}</td>
     <td class="text-right">¥{{ (asset.y2024_dividend || 0).toFixed(2) }}</td>
     <td class="text-right highlight-yield">{{ (asset.ttm_yield || 0).toFixed(2) }}%</td>
@@ -42,7 +57,7 @@
   
   <!-- 展开的分红历史区域 -->
   <tr v-if="isExpanded" class="dividend-detail-row">
-    <td colspan="8">
+    <td colspan="10">
       <div class="dividend-detail">
         <div class="dividend-header">
           <h4>📊 {{ asset.name }} ({{ asset.code }}) 历年分红记录</h4>
@@ -152,6 +167,17 @@ function formatPrice(p) {
   return (p == null || Number.isNaN(p)) ? '—' : Number(p).toFixed(2)
 }
 
+/**
+ * 盈亏配色：A 股惯例是「红涨绿跌」，与欧美相反。
+ * 盈利 → 红，亏损 → 绿。不要"顺手改成绿色盈利"。
+ */
+const profitClass = computed(() => {
+  const v = Number(props.asset.profit_amount) || 0
+  if (v > 0) return 'profit-up'
+  if (v < 0) return 'profit-down'
+  return 'profit-flat'
+})
+
 // 计算累计分红
 const totalHistoricalDividend = computed(() => {
   return dividendHistory.value.reduce((sum, item) => {
@@ -245,6 +271,27 @@ function formatNumber(num) {
   background: #eef2f8;
   color: #475569;
   border: 1px solid #cbd5e1;
+}
+
+/* 盈亏：A 股惯例「红涨绿跌」（与欧美相反） */
+.profit-cell {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.profit-pct {
+  font-size: 11px;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.profit-up { color: #e11d48; }    /* 盈利 → 红 */
+.profit-down { color: #16a34a; }  /* 亏损 → 绿 */
+.profit-flat { color: #94a3b8; }  /* 持平 → 灰 */
+
+.muted {
+  color: #cbd5e1;
+  cursor: help;
 }
 
 /* 价格来源 badge：实时 / 模拟 / 未刷新 */

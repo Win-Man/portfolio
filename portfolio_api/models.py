@@ -25,6 +25,9 @@ class Asset(Base):
     asset_type = Column(String, default="股票")
     quantity = Column(Float, default=0)
     price = Column(Float, default=0)
+    # 每股成本（建仓成本，人为填写）。NULL = 尚未填写
+    # 注意：成本是历史事实，刷新价格时**不会**被改写
+    cost_price = Column(Float, nullable=True)
     dividend_per_share = Column(Float, default=0)
     ttm_yield = Column(Float, default=0)
     static_yield = Column(Float, default=0)

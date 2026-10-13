@@ -200,6 +200,11 @@ def create_asset(portfolio_id: int, asset: AssetCreate, db: Session = Depends(ge
         payload["asset_type"] = guess_asset_type(code)
     # 规整代码（去掉可能带的 sh/sz 前缀）
     payload["code"] = normalize_code(code)
+    # 未填成本 → 默认用当前价（相当于「刚建仓」，盈亏为 0），
+    # 之后用户可在编辑里改成真实建仓成本。
+    # 用 falsy 判断：None 与 0 都视为「未填」（成本 0 会让盈亏比例无穷大）
+    if not payload.get("cost_price"):
+        payload["cost_price"] = payload.get("price") or 0
 
     db_asset = Asset(portfolio_id=portfolio_id, **payload)
     db.add(db_asset)

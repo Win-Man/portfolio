@@ -38,8 +38,14 @@
             <th @click="sortBy('price')" class="text-right">
               最新价 <span class="sort-icon">{{ getSortIcon('price') }}</span>
             </th>
+            <th @click="sortBy('cost_price')" class="text-right">
+              成本 <span class="sort-icon">{{ getSortIcon('cost_price') }}</span>
+            </th>
             <th @click="sortBy('holding_value')" class="text-right">
               持仓市值 <span class="sort-icon">{{ getSortIcon('holding_value') }}</span>
+            </th>
+            <th @click="sortBy('profit_amount')" class="text-right">
+              盈亏 <span class="sort-icon">{{ getSortIcon('profit_amount') }}</span>
             </th>
             <th @click="sortBy('y2025_dividend')" class="text-right">
               25年每股分红 <span class="sort-icon">{{ getSortIcon('y2025_dividend') }}</span>

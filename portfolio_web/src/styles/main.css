@@ -164,6 +164,19 @@ body {
   background: linear-gradient(135deg, #059669, #34d399);
 }
 
+/* 总盈亏卡片：A 股惯例「红涨绿跌」（与欧美相反），用底色区分正负 */
+.overview-item.profit-up {
+  background: linear-gradient(135deg, #be123c, #fb7185);
+}
+
+.overview-item.profit-down {
+  background: linear-gradient(135deg, #15803d, #4ade80);
+}
+
+.overview-item.profit-flat {
+  background: linear-gradient(135deg, #475569, #94a3b8);
+}
+
 .overview-item .label {
   font-size: 13px;
   opacity: 0.9;
@@ -224,6 +237,11 @@ body {
 .data-table th .sort-icon {
   margin-left: 4px;
   font-size: 12px;
+}
+
+/* 操作列禁止换行：列数变多后按钮会被挤成两行 */
+.data-table td.actions {
+  white-space: nowrap;
 }
 
 .data-table tbody tr:hover {

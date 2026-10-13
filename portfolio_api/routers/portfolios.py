@@ -77,10 +77,22 @@ def get_portfolio_summary(portfolio_id: int, db: Session = Depends(get_db)):
 
     expected_annual_income = sum(a.quantity * a.dividend_per_share for a in assets)
 
+    # 成本与盈亏：只统计**已填成本**的标的（cost_price 为 None 或 0 的跳过），
+    # 否则未填成本的标的会被当成零成本，把总盈亏算得虚高
+    costed = [a for a in assets if a.cost_price]
+    total_cost = sum(a.quantity * a.cost_price for a in costed)
+    costed_market_value = sum(a.quantity * a.price for a in costed)
+    total_profit = costed_market_value - total_cost
+    total_profit_percent = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+
     return PortfolioSummary(
         total_market_value=total_market_value,
         asset_count=total_assets_count,
         weighted_ttm_yield=weighted_yield,
         expected_annual_income=expected_annual_income,
+        total_cost=total_cost,
+        total_profit=total_profit,
+        total_profit_percent=total_profit_percent,
+        costed_asset_count=len(costed),
         description="基于当前持股计算的汇总数据",
     )

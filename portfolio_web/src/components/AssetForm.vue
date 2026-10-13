@@ -100,6 +100,26 @@
           
           <div class="form-row">
             <div class="form-group">
+              <label>每股成本 (元)</label>
+              <input 
+                v-model.number="form.cost_price" 
+                type="number" 
+                min="0"
+                step="0.01"
+                placeholder="留空则按最新价格"
+                @input="costTouched = true"
+              />
+              <div class="form-hint">
+                <template v-if="!costTouched">未填时默认等于最新价（盈亏为 0）</template>
+                <template v-else-if="profitPreview !== null">
+                  盈亏 {{ profitPreview >= 0 ? '+' : '' }}{{ profitPreview.toFixed(2) }}%
+                </template>
+              </div>
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
               <label>最近一年每股分红 (元)</label>
               <input 
                 v-model.number="form.dividend_per_share" 
@@ -183,6 +203,7 @@ const form = ref({
   asset_type: '股票',
   quantity: null,
   price: null,
+  cost_price: null,
   dividend_per_share: null,
   ttm_yield: null,
   note: ''
@@ -190,10 +211,33 @@ const form = ref({
 
 const errors = ref({})
 
+/**
+ * 成本是否被用户手动改过。
+ * 未改过时，成本跟随「最新价」自动填充（含搜索选股后自动拉到的价格）；
+ * 一旦用户动过成本输入框，就不再覆盖他的输入。
+ */
+const costTouched = ref(false)
+
+const profitPreview = computed(() => {
+  const p = Number(form.value.price)
+  const c = Number(form.value.cost_price)
+  if (!p || !c || c <= 0) return null
+  return ((p - c) / c) * 100
+})
+
+// 最新价变化时，若成本未被手动改过则跟随
+watch(() => form.value.price, (p) => {
+  if (!costTouched.value && p > 0) {
+    form.value.cost_price = p
+  }
+})
+
 watch(() => props.asset, (newAsset) => {
   if (newAsset) {
     // 编辑已有资产：补齐可能缺失的 asset_type
     form.value = { asset_type: guessAssetType(newAsset.code), ...newAsset }
+    // 编辑时成本来自库里的真实值，不应被价格覆盖
+    costTouched.value = true
   } else {
     form.value = {
       name: '',
@@ -201,10 +245,12 @@ watch(() => props.asset, (newAsset) => {
       asset_type: '股票',
       quantity: null,
       price: null,
+      cost_price: null,
       dividend_per_share: null,
       ttm_yield: null,
       note: ''
     }
+    costTouched.value = false
   }
   errors.value = {}
   // 重置搜索
