@@ -181,27 +181,27 @@ def test_negative_cost_is_a_valid_value(client):
     """★ 负成本必须被当作「已填」，而不是「未填」。"""
     r = client.post("/api/portfolios/1/assets", json={
         "name": "招商银行", "code": "600036",
-        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
     assert r.status_code == 200, r.text
     b = r.json()
 
-    assert b["cost_price"] == pytest.approx(-4.891)
+    assert b["cost_price"] == pytest.approx(-3.25)
     assert b["has_cost"] is True, "负成本是合法值，不能判定为未填"
 
 
 def test_negative_cost_computes_amount_but_suppresses_percent(client):
-    """负成本：金额照算，比例置 null（(42.8+4.891)/−4.891 = −975%，会误导）。"""
+    """负成本：金额照算，比例置 null（(42.8+3.25)/−3.25 ≈ −1417%，会误导）。"""
     r = client.post("/api/portfolios/1/assets", json={
         "name": "招商银行", "code": "600036",
-        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
     b = r.json()
 
-    # 金额： (42.80 − (−4.891)) × 100 = 4769.10
-    assert b["profit_amount"] == pytest.approx(4769.10, abs=0.01)
+    # 金额： (42.80 − (−3.25)) × 100 = 4605.00
+    assert b["profit_amount"] == pytest.approx(4605.00, abs=0.01)
     # 持仓成本为负：表示净投入已收回
-    assert b["cost_value"] == pytest.approx(-489.10, abs=0.01)
+    assert b["cost_value"] == pytest.approx(-325.00, abs=0.01)
     # 比例无意义 → null
     assert b["profit_percent"] is None
 
@@ -237,14 +237,14 @@ def test_refresh_preserves_negative_cost(client, mock_tencent_ok, mock_dividend)
     """刷新不得把负成本改写掉（成本是历史事实）。"""
     r = client.post("/api/portfolios/1/assets", json={
         "name": "招商银行", "code": "600036",
-        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
     aid = r.json()["id"]
 
     client.post(f"/api/assets/{aid}/refresh-price")
     b = client.get(f"/api/assets/{aid}").json()
 
-    assert b["cost_price"] == pytest.approx(-4.891)
+    assert b["cost_price"] == pytest.approx(-3.25)
     assert b["has_cost"] is True
     assert b["profit_percent"] is None
 
@@ -253,9 +253,9 @@ def test_summary_with_negative_cost(client):
     """负成本参与汇总，且总成本≤0 时比例置 null。"""
     pid = client.post("/api/portfolios", json={"name": "负成本组合"}).json()["id"]
 
-    # A：成本 −4.891，现价 42.80，100 股 → 盈亏 +4769.10，成本 −489.10
+    # A：成本 −3.25，现价 42.80，100 股 → 盈亏 +4605.00，成本 −325.00
     client.post(f"/api/portfolios/{pid}/assets", json={
-        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
     # B：成本 10，现价 20，100 股 → 盈亏 +1000，成本 1000
     client.post(f"/api/portfolios/{pid}/assets", json={
@@ -265,11 +265,11 @@ def test_summary_with_negative_cost(client):
     s = client.get(f"/api/portfolios/{pid}/summary").json()
 
     assert s["costed_asset_count"] == 2
-    assert s["total_cost"] == pytest.approx(-489.10 + 1000.0, abs=0.01)
-    assert s["total_profit"] == pytest.approx(4769.10 + 1000.0, abs=0.01)
-    # 总成本 510.90 > 0 → 比例可算
+    assert s["total_cost"] == pytest.approx(-325.00 + 1000.0, abs=0.01)
+    assert s["total_profit"] == pytest.approx(4605.00 + 1000.0, abs=0.01)
+    # 总成本 675.00 > 0 → 比例可算
     assert s["total_profit_percent"] == pytest.approx(
-        (5769.10 / 510.90) * 100, abs=0.01
+        (5605.00 / 675.00) * 100, abs=0.01
     )
 
 
@@ -278,13 +278,13 @@ def test_summary_percent_null_when_total_cost_non_positive(client):
     pid = client.post("/api/portfolios", json={"name": "全负成本组合"}).json()["id"]
 
     client.post(f"/api/portfolios/{pid}/assets", json={
-        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
 
     s = client.get(f"/api/portfolios/{pid}/summary").json()
 
-    assert s["total_cost"] == pytest.approx(-489.10, abs=0.01)
-    assert s["total_profit"] == pytest.approx(4769.10, abs=0.01)
+    assert s["total_cost"] == pytest.approx(-325.00, abs=0.01)
+    assert s["total_profit"] == pytest.approx(4605.00, abs=0.01)
     assert s["total_profit_percent"] is None
 
 
@@ -296,7 +296,7 @@ def test_summary_skips_null_cost_but_keeps_negative(client):
     pid = client.post("/api/portfolios", json={"name": "混合"}).json()["id"]
     client.post(f"/api/portfolios/{pid}/assets", json={
         "name": "负成本", "code": "600036",
-        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+        "quantity": 100, "price": 42.80, "cost_price": -3.25,
     })
     r = client.post(f"/api/portfolios/{pid}/assets", json={
         "name": "置空", "code": "600900",
@@ -314,7 +314,7 @@ def test_summary_skips_null_cost_but_keeps_negative(client):
 
     s = client.get(f"/api/portfolios/{pid}/summary").json()
     assert s["costed_asset_count"] == 1, "只应统计负成本那条"
-    assert s["total_cost"] == pytest.approx(-489.10, abs=0.01)
+    assert s["total_cost"] == pytest.approx(-325.00, abs=0.01)
 
 
 # ---------- 组合汇总 ----------
