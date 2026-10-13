@@ -10,6 +10,7 @@ from schemas import (
     PortfolioResponse,
     PortfolioSummary,
 )
+from portfolio_math import total_market_value, expected_annual_income, weighted_ttm_yield
 
 router = APIRouter(prefix="/api/portfolios", tags=["portfolios"])
 
@@ -67,15 +68,11 @@ def get_portfolio_summary(portfolio_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
     assets = db.query(Asset).filter(Asset.portfolio_id == portfolio_id).all()
-    total_market_value = sum(a.quantity * a.price for a in assets)
+    # 口径统一放在 portfolio_math：目标进度计算复用同一组函数，避免两处公式漂移
+    total_market_value_sum = total_market_value(assets)
     total_assets_count = len(assets)
-
-    if total_market_value > 0 and total_assets_count > 0:
-        weighted_yield = sum((a.quantity * a.price) * a.ttm_yield for a in assets) / total_market_value
-    else:
-        weighted_yield = 0.0
-
-    expected_annual_income = sum(a.quantity * a.dividend_per_share for a in assets)
+    weighted_yield = weighted_ttm_yield(assets)
+    expected_annual_income_sum = expected_annual_income(assets)
 
     # 成本与盈亏：只统计**已填成本**的标的（cost_price 为 NULL 的跳过），
     # 否则未填成本的标的会被当成零成本，把总盈亏算得虚高。
@@ -90,10 +87,10 @@ def get_portfolio_summary(portfolio_id: int, db: Session = Depends(get_db)):
     )
 
     return PortfolioSummary(
-        total_market_value=total_market_value,
+        total_market_value=total_market_value_sum,
         asset_count=total_assets_count,
         weighted_ttm_yield=weighted_yield,
-        expected_annual_income=expected_annual_income,
+        expected_annual_income=expected_annual_income_sum,
         total_cost=total_cost,
         total_profit=total_profit,
         total_profit_percent=total_profit_percent,

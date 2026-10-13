@@ -156,3 +156,71 @@ class PortfolioSummary(BaseModel):
     total_profit_percent: Optional[float] = None
     costed_asset_count: int = 0
     description: str = "基于当前持股计算的汇总数据"
+
+
+# Income goal schemas（年收入目标）
+class GoalBase(BaseModel):
+    # 名称先去首尾空白（路由里 strip 后判空）
+    name: str = Field(min_length=1, max_length=50)
+    # 目标年收入（元）
+    annual_income_target: float = Field(gt=0, le=1_000_000_000)
+
+
+class GoalCreate(GoalBase):
+    pass
+
+
+class GoalUpdate(BaseModel):
+    """部分更新语义：字段为 None 则不改（与 PortfolioUpdate 一致）。"""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    annual_income_target: Optional[float] = Field(default=None, gt=0, le=1_000_000_000)
+
+
+class GoalResponse(GoalBase):
+    id: int
+    portfolio_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GoalProgressResponse(BaseModel):
+    goal_id: int
+    goal_name: str
+    portfolio_id: int
+
+    # ── 当前（口径 = summary.expected_annual_income = Σ(quantity × dividend_per_share)）
+    current_annual_income: float
+    current_monthly_income: float
+
+    # ── 目标
+    target_annual_income: float
+    target_monthly_income: float
+
+    # ── 缺口 / 进度
+    gap_annual: float            # max(0, 目标 − 当前)
+    gap_monthly: float
+    progress_percent: float      # 当前 / 目标 × 100，>100 时保留原值不做截断
+    is_achieved: bool
+    surplus_annual: float        # max(0, 当前 − 目标)
+    surplus_monthly: float
+
+    # ── 路径 ①：收益率不变，还需多少本金
+    additional_capital: Optional[float]       # 缺口 ÷ (假设收益率/100)；假设收益率<=0 → null
+    assumed_yield_percent: float              # 本次实际采用的假设收益率（百分数）
+    assumed_yield_is_default: bool            # true = 未传 assumed_yield，用的组合加权 TTM
+
+    # ── 路径 ②：本金不变，收益率需达到多少
+    # 口径只用「收入 ÷ 持仓市值」；与加权 TTM 收益率数值不一致是正常的（D3）
+    required_yield_percent: Optional[float]    # 目标年收入 ÷ 市值 × 100；市值<=0 → null
+    current_yield_percent: Optional[float]     # 当前年收入 ÷ 市值 × 100；市值<=0 → null
+    yield_gap_points: Optional[float]          # required − current；任一为 null → null
+
+    # ── 参考与提示
+    total_market_value: float
+    weighted_ttm_yield: float                  # 仅供对照 / 说明默认值来源
+    asset_count: int
+    has_mock_price: bool
+    calc_note: str                             # 无异常时为空串

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
-from routers import portfolios, assets, stocks
+from routers import portfolios, assets, stocks, goals
 
 # 配置日志：开发期人类可读，生产可改 JSON formatter
 logging.basicConfig(
@@ -92,6 +92,7 @@ app.add_middleware(
 app.include_router(portfolios.router)
 app.include_router(assets.router)
 app.include_router(stocks.router)
+app.include_router(goals.router)
 
 
 # ---------- 种子数据 ----------
