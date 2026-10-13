@@ -10,9 +10,9 @@
       >{{ asset.asset_type }}</span>
     </td>
     <td @click="toggleExpand" class="expandable-cell">{{ asset.code }}</td>
-    <td class="text-right">{{ formatNumber(asset.quantity) }}</td>
-    <td class="text-right">
-      ¥{{ formatPrice(asset.price) }}
+    <td class="text-right">{{ formatAmount(asset.quantity) }}</td>
+    <td class="text-right price-cell">
+      <span class="price-value">¥{{ formatAmount(asset.price) }}</span>
       <span
         v-if="sourceBadge"
         class="source-badge"
@@ -31,27 +31,27 @@
       </button>
     </td>
     <td class="text-right">
-      <template v-if="asset.has_cost">¥{{ formatPrice(asset.cost_price) }}</template>
+      <template v-if="asset.has_cost">¥{{ formatAmountOrDash(asset.cost_price) }}</template>
       <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
     </td>
-    <td class="text-right">¥{{ formatNumber(asset.holding_value) }}</td>
+    <td class="text-right">¥{{ formatAmount(asset.holding_value) }}</td>
     <td class="text-right">
       <template v-if="asset.has_cost">
         <div class="profit-cell" :class="profitClass">
-          {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatNumber(Math.abs(asset.profit_amount)) }}
+          {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatAmount(Math.abs(asset.profit_amount)) }}
         </div>
         <!-- 成本 ≤ 0 时后端返回 percent=null（负成本的比例无意义），只显示金额 -->
         <div v-if="asset.profit_percent !== null && asset.profit_percent !== undefined"
              class="profit-pct" :class="profitClass">
-          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ asset.profit_percent.toFixed(2) }}%
+          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ formatAmount(asset.profit_percent) }}%
         </div>
         <div v-else class="profit-pct muted" title="成本 ≤ 0，盈亏比例无意义">—</div>
       </template>
       <span v-else class="muted" title="未填成本，无法计算盈亏">—</span>
     </td>
-    <td class="text-right">¥{{ (asset.y2025_dividend || 0).toFixed(2) }}</td>
-    <td class="text-right">¥{{ (asset.y2024_dividend || 0).toFixed(2) }}</td>
-    <td class="text-right highlight-yield">{{ (asset.ttm_yield || 0).toFixed(2) }}%</td>
+    <td class="text-right">¥{{ formatAmount(asset.y2025_dividend) }}</td>
+    <td class="text-right">¥{{ formatAmount(asset.y2024_dividend) }}</td>
+    <td class="text-right highlight-yield">{{ formatAmount(asset.ttm_yield) }}%</td>
     <td class="actions" @click.stop>
       <button class="btn btn-secondary btn-sm" @click="$emit('edit', asset)">编辑</button>
       <button class="btn btn-danger btn-sm" @click="$emit('delete', asset.id)">删除</button>
@@ -88,16 +88,16 @@
               <tr v-for="item in dividendHistory" :key="item.year + item.ex_dividend_date">
                 <td>{{ item.year }}年</td>
                 <td>{{ item.ex_dividend_date || '-' }}</td>
-                <td class="text-right">¥{{ (item.dividend_per_share || 0).toFixed(2) }}</td>
-                <td class="text-right">{{ (item.bonus_shares || 0) }}</td>
-                <td class="text-right">{{ (item.transfer_shares || 0) }}</td>
+                <td class="text-right">¥{{ formatAmount(item.dividend_per_share) }}</td>
+                <td class="text-right">{{ formatAmount(item.bonus_shares) }}</td>
+                <td class="text-right">{{ formatAmount(item.transfer_shares) }}</td>
                 <td>
                   <span :class="['status-badge', item.status === '已实施' ? 'status-done' : 'status-pending']">
                     {{ item.status }}
                   </span>
                 </td>
                 <td class="text-right highlight-dividend">
-                  ¥{{ formatNumber(asset.quantity * (item.dividend_per_share || 0)) }}
+                  ¥{{ formatAmount(asset.quantity * (item.dividend_per_share || 0)) }}
                 </td>
               </tr>
             </tbody>
@@ -105,7 +105,7 @@
               <tr>
                 <td colspan="6" class="text-right"><strong>累计分红合计：</strong></td>
                 <td class="text-right highlight-dividend">
-                  <strong>¥{{ formatNumber(totalHistoricalDividend) }}</strong>
+                  <strong>¥{{ formatAmount(totalHistoricalDividend) }}</strong>
                 </td>
               </tr>
             </tfoot>
@@ -117,9 +117,9 @@
         </div>
         
         <div class="dividend-summary">
-          <span>年均每股分红：<strong>¥{{ averageDividend }}/股</strong></span>
-          <span>累计历史分红：<strong>¥{{ formatNumber(totalHistoricalDividend) }}</strong></span>
-          <span>按持股计算累计：<strong>¥{{ formatNumber(asset.quantity * averageDividend) }}</strong></span>
+          <span>年均每股分红：<strong>¥{{ formatAmount(averageDividend) }}/股</strong></span>
+          <span>累计历史分红：<strong>¥{{ formatAmount(totalHistoricalDividend) }}</strong></span>
+          <span>按持股计算累计：<strong>¥{{ formatAmount(asset.quantity * averageDividend) }}</strong></span>
         </div>
       </div>
     </td>
@@ -166,8 +166,26 @@ const sourceBadge = computed(() => {
   return { kind: src, label: labels[src] || src, hint: hints[src] || src }
 })
 
-function formatPrice(p) {
-  return (p == null || Number.isNaN(p)) ? '—' : Number(p).toFixed(2)
+/**
+ * 统一数字格式：千分位 + 固定 2 位小数。
+ *
+ * 刻意**不用「万」**：同一列里混用 "1.25万" 与 "5,830.00" 会让宽度参差不齐，
+ * 右对齐也救不回来（小数点对不齐）。统一 2 位小数后，右对齐即可让小数点列成一条线。
+ */
+function formatAmount(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0.00'
+  return v.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+/** 可为空的金额：null / NaN → 「—」（用于未填成本的场景） */
+function formatAmountOrDash(n) {
+  if (n == null) return '—'
+  const v = Number(n)
+  return Number.isFinite(v) ? formatAmount(v) : '—'
 }
 
 /**
@@ -188,11 +206,11 @@ const totalHistoricalDividend = computed(() => {
   }, 0)
 })
 
-// 计算年均每股分红
+// 计算年均每股分红（返回数值，展示时再统一格式化）
 const averageDividend = computed(() => {
   if (dividendHistory.value.length === 0) return 0
   const total = dividendHistory.value.reduce((sum, item) => sum + (item.dividend_per_share || 0), 0)
-  return (total / dividendHistory.value.length).toFixed(2)
+  return total / dividendHistory.value.length
 })
 
 function toggleExpand() {
@@ -216,13 +234,6 @@ async function loadDividendHistory() {
   } finally {
     loadingDividend.value = false
   }
-}
-
-function formatNumber(num) {
-  if (num >= 10000) {
-    return (num / 10000).toFixed(2) + '万'
-  }
-  return num.toLocaleString()
 }
 </script>
 
@@ -409,6 +420,25 @@ function formatNumber(num) {
 
 .text-right {
   text-align: right;
+}
+
+/* 数字列统一处理：
+   - nowrap：价格单元格里有「价格 + 来源徽标 + 刷新按钮」三样，
+     列宽被挤压时徽标/按钮会掉到第二行；nowrap 后由 .table-container 横向滚动承接
+   - tabular-nums：等宽数字，配合「固定 2 位小数 + 右对齐」让各列小数点列成一条线 */
+.asset-row td.text-right,
+.dividend-table td.text-right {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 最新价：价格、徽标、刷新按钮保持同一行 */
+.price-cell {
+  white-space: nowrap;
+}
+
+.price-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .highlight-dividend {

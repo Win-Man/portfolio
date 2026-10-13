@@ -235,8 +235,11 @@ body {
 }
 
 .data-table th .sort-icon {
+  display: inline-block;
+  width: 12px;
   margin-left: 4px;
   font-size: 12px;
+  text-align: center;
 }
 
 /* 操作列禁止换行：列数变多后按钮会被挤成两行 */
