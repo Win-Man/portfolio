@@ -1,13 +1,19 @@
 <template>
   <tr class="asset-row" :class="{ expanded: isExpanded }">
-    <td @click="toggleExpand" class="expandable-cell">
-      <span class="expand-icon">{{ isExpanded ? '▼' : '▶' }}</span>
-      {{ asset.name }}
-      <span
-        v-if="asset.asset_type && asset.asset_type !== '股票'"
-        class="asset-type-badge"
-        :class="asset.asset_type === 'ETF' ? 'type-etf' : 'type-other'"
-      >{{ asset.asset_type }}</span>
+    <td
+      @click="toggleExpand"
+      class="expandable-cell name-cell"
+      :title="asset.name"
+    >
+      <div class="name-inner">
+        <span class="expand-icon">{{ isExpanded ? '▼' : '▶' }}</span>
+        <span class="name-text">{{ asset.name }}</span>
+        <span
+          v-if="asset.asset_type && asset.asset_type !== '股票'"
+          class="asset-type-badge"
+          :class="asset.asset_type === 'ETF' ? 'type-etf' : 'type-other'"
+        >{{ asset.asset_type }}</span>
+      </div>
     </td>
     <td @click="toggleExpand" class="expandable-cell">{{ asset.code }}</td>
     <td class="text-right">{{ formatQuantity(asset.quantity) }}</td>
@@ -264,6 +270,11 @@ async function loadDividendHistory() {
   cursor: pointer;
 }
 
+/* fixed 布局下列宽由 colgroup 决定，内容超出需自行裁剪，否则会溢出到相邻单元格 */
+.asset-row td {
+  overflow: hidden;
+}
+
 .asset-row:hover {
   background-color: #f5f5f5;
 }
@@ -274,6 +285,31 @@ async function loadDividendHistory() {
 
 .expandable-cell {
   cursor: pointer;
+}
+
+/* 名称列：固定列宽内单行显示，超出用省略号截断；
+   完整名称通过 title 属性在悬浮时显示（长 ETF 名称不再撑高行高） */
+.name-cell {
+  overflow: hidden;
+}
+
+.name-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;           /* 让子元素可以收缩，否则 flex 子项不会截断 */
+}
+
+.name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-type-badge {
+  flex: 0 0 auto;
 }
 
 .expand-icon {
