@@ -157,8 +157,8 @@ const DEFAULT_COLUMNS = [
   { key: 'cost_price',     label: '成本',         align: 'right',  width: 96,  minWidth: 86 },
   { key: 'holding_value',  label: '持仓市值',     align: 'right',  width: 110, minWidth: 100 },
   { key: 'profit_amount',  label: '盈亏',         align: 'right',  width: 112, minWidth: 100 },
-  { key: 'y2025_dividend', label: '25年每股分红', align: 'right',  width: 120, minWidth: 112 },
   { key: 'y2026_dividend', label: '26年每股分红', align: 'right',  width: 120, minWidth: 112 },
+  { key: 'y2025_dividend', label: '25年每股分红', align: 'right',  width: 120, minWidth: 112 },
   { key: 'y2024_dividend', label: '24年每股分红', align: 'right',  width: 120, minWidth: 112 },
   { key: 'ttm_yield',      label: 'TTM收益率',    align: 'right',  width: 116, minWidth: 110 },
   { key: 'actions',        label: '操作',         align: 'center', width: 142, minWidth: 136, sortable: false, resizable: false },
@@ -175,7 +175,8 @@ const LOCKED_KEYS = new Set(['actions'])
 // 列宽、可见性、显示顺序各存一个 key
 const STORAGE_WIDTHS_KEY = 'portfolio.assetList.colWidths.v1'
 const STORAGE_VISIBILITY_KEY = 'portfolio.assetList.visibility.v1'
-const STORAGE_ORDER_KEY = 'portfolio.assetList.order.v1'
+// v2：默认顺序修正为「26 → 25 → 24」后升版，使旧的错误顺序不再覆盖新默认值
+const STORAGE_ORDER_KEY = 'portfolio.assetList.order.v2'
 
 const columns = ref(DEFAULT_COLUMNS.map((c) => ({ ...c })))
 
@@ -226,9 +227,15 @@ function hideAllColumns() {
   persistVisibility()
 }
 
+/** 恢复默认：可见性 + 列宽 + 列顺序 全部重置 */
 function resetColumnVisibility() {
   visibleKeys.value = new Set(DEFAULT_COLUMNS.map((c) => c.key))
   persistVisibility()
+  // 列宽回到默认
+  columns.value = DEFAULT_COLUMNS.map((c) => ({ ...c }))
+  persistWidths()
+  // 列顺序也回到默认
+  persistOrder()
 }
 
 function persistVisibility() {
@@ -272,6 +279,11 @@ function onHeaderMouseDown(e, col) {
   // 点在列宽拖动条上时走 resize，不进入排序拖动
   if (e.target?.closest?.('.col-resizer')) return
   if (e.button !== 0) return
+  // ⚠ 必须 preventDefault：否则在真实浏览器里按住表头拖动会触发
+  // 原生文本选择 / 原生 drag-and-drop，导致后续 mousemove/mouseup
+  // 收不到，表现为「拖动没反应」（CDP 派发事件不会触发原生 DnD，所以
+  // 只有这个脚本层面测不出来的坑）
+  e.preventDefault()
   headerDown = { key: col.key, startX: e.clientX }
   window.addEventListener('mousemove', onHeaderMouseMove)
   window.addEventListener('mouseup', onHeaderMouseUp)
@@ -282,6 +294,7 @@ function onHeaderMouseMove(e) {
   if (!draggingKey.value) {
     if (Math.abs(e.clientX - headerDown.startX) < DRAG_THRESHOLD_PX) return
     draggingKey.value = headerDown.key
+    document.body.classList.add('col-reordering')
   }
   // 找出指针下方的表头，决定插入位置
   const el = document.elementFromPoint(e.clientX, e.clientY)
@@ -299,6 +312,7 @@ function onHeaderMouseMove(e) {
 function onHeaderMouseUp() {
   window.removeEventListener('mousemove', onHeaderMouseMove)
   window.removeEventListener('mouseup', onHeaderMouseUp)
+  document.body.classList.remove('col-reordering')
 
   const from = draggingKey.value
   const to = dropTargetKey.value
@@ -671,6 +685,13 @@ button:disabled {
 .data-table :deep(th.is-dragging) ~ :deep(th),
 .data-table.reordering {
   user-select: none;
+}
+
+/* 拖动排序期间的全局光标与选中控制 */
+:global(body.col-reordering),
+:global(body.col-reordering *) {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 
 /*
