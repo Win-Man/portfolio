@@ -83,6 +83,22 @@ export function stableNameOrder(assets, primaryPick) {
   return agg.sort((a, b) => b.value - a.value).map((d) => d.name)
 }
 
+/**
+ * 取占比最大的 n 项（用于饼图的「TOP N 图例」）。
+ *
+ * 返回项带 `index`，是它在**传入数组中的原始下标** —— 调用方要用它取色，
+ * 否则排序后再按下标取色，图例色点会与饼图色块对不上。
+ *
+ * @param {Array<{name:string,value:number,percent?:number}>} slices
+ * @param {number} n
+ */
+export function topSlices(slices, n = 5) {
+  return (slices || [])
+    .map((d, index) => ({ ...d, index }))
+    .sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))
+    .slice(0, Math.max(0, n))
+}
+
 /** 数字格式化：精确到分，带千分位 */
 export function formatExact(num) {
   return Number(num || 0).toLocaleString('zh-CN', {

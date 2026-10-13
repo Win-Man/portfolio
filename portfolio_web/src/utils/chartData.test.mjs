@@ -15,6 +15,7 @@ import {
   formatExact,
   stableNameOrder,
   truncate,
+  topSlices,
 } from './chartData.js'
 
 // ---------- aggregateAssets ----------
@@ -254,4 +255,62 @@ test('真实组合：9 项标的不触发合并，两图百分比合计 100', ()
   const vByName = Object.fromEntries(valueSlices.map((d) => [d.name, d.percent]))
   assert.ok(byName['港股通红利ETF华泰柏瑞'] > vByName['港股通红利ETF华泰柏瑞'],
     '港股通红利ETF的收入占比应高于其市值占比')
+})
+
+// ---------- topSlices：饼图 TOP N 图例的取数 ----------
+
+test('topSlices：取占比最大的 n 项，且按值降序', () => {
+  const slices = [
+    { name: 'A', value: 10 },
+    { name: 'B', value: 50 },
+    { name: 'C', value: 30 },
+    { name: 'D', value: 5 },
+    { name: 'E', value: 40 },
+    { name: 'F', value: 1 },
+  ]
+  assert.deepEqual(
+    topSlices(slices, 5).map((d) => d.name),
+    ['B', 'E', 'C', 'A', 'D'],
+  )
+})
+
+test('topSlices：保留原始下标，供调用方按饼图色块取色', () => {
+  const slices = [
+    { name: 'A', value: 10 },  // index 0
+    { name: 'B', value: 50 },  // index 1
+    { name: 'C', value: 30 },  // index 2
+  ]
+  const top = topSlices(slices, 3)
+  assert.deepEqual(top.map((d) => d.index), [1, 2, 0])
+  // 关键：B 排到第一位，但 index 仍是 1 —— 用它取色才能对上饼图里的 B 色块
+  assert.equal(top[0].name, 'B')
+  assert.equal(top[0].index, 1)
+})
+
+test('topSlices：项数不足 n 时全返回', () => {
+  const slices = [{ name: 'A', value: 3 }, { name: 'B', value: 1 }]
+  assert.deepEqual(topSlices(slices, 5).map((d) => d.name), ['A', 'B'])
+})
+
+test('topSlices：空数组 / null / n=0 安全', () => {
+  assert.deepEqual(topSlices([], 5), [])
+  assert.deepEqual(topSlices(null, 5), [])
+  assert.deepEqual(topSlices([{ name: 'A', value: 1 }], 0), [])
+})
+
+test('topSlices：不修改传入数组', () => {
+  const slices = [{ name: 'A', value: 1 }, { name: 'B', value: 9 }]
+  const snapshot = JSON.stringify(slices)
+  topSlices(slices, 1)
+  assert.equal(JSON.stringify(slices), snapshot, '原数组顺序不应被改动')
+})
+
+test('topSlices：真实组合中 其他 项也参与排序（占比大就可能进图例）', () => {
+  const slices = [
+    { name: '其他 (3 项)', value: 100, isMisc: true },
+    { name: '小标的', value: 1 },
+  ]
+  const top = topSlices(slices, 5)
+  assert.equal(top[0].name, '其他 (3 项)')
+  assert.equal(top[0].isMisc, true)
 })

@@ -17,6 +17,22 @@
         <p>{{ emptyText }}</p>
       </div>
     </div>
+
+    <!--
+      TOP5 图例（纯 DOM，不用 ECharts 的 LegendComponent）：
+      饼图本身仍展示完整分布，图例只列占比最大的 5 项，用于「认色」。
+      颜色取自饼图中的**原始下标**，保证与色块一致。
+    -->
+    <div v-if="legendItems.length > 0" class="chart-legend">
+      <span class="legend-caption">TOP 5</span>
+      <ul class="legend-list">
+        <li v-for="item in legendItems" :key="item.name" class="legend-item">
+          <span class="legend-dot" :style="{ background: item.color }"></span>
+          <span class="legend-name" :title="item.name">{{ item.name }}</span>
+          <span class="legend-percent">{{ item.percent.toFixed(1) }}%</span>
+        </li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -32,6 +48,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   buildSlices,
   buildTooltipHtml,
+  topSlices,
 } from '../utils/chartData.js'
 import { formatAmount } from '../utils/format.js'
 import { MISC_COLOR, pickColor } from '../utils/chartColors.js'
@@ -63,6 +80,23 @@ const total = computed(() => slices.value.reduce((s, d) => s + d.value, 0))
 function colorOf(d, i) {
   return d.isMisc ? MISC_COLOR : pickColor(d.name, i, props.colorMap)
 }
+
+/**
+ * TOP5 图例项。
+ *
+ * 关键：先按**饼图中的原始下标**取色，再排序取前 5。
+ * 若先排序再取色，图例色点会与饼图色块对不上（pickColor 依赖下标兜底）。
+ */
+const legendItems = computed(() =>
+  topSlices(slices.value, 5).map((d) => ({
+    name: d.name,
+    value: d.value,
+    percent: Number.isFinite(d.percent) ? d.percent : 0,
+    // d.index 是原始下标，据此取色才能与饼图色块一致
+    color: colorOf(d, d.index),
+    isMisc: !!d.isMisc,
+  }))
+)
 
 function buildOption() {
   const data = slices.value
@@ -221,5 +255,70 @@ onBeforeUnmount(() => {
 
 .chart-empty p {
   margin: 0;
+}
+
+/* ---------- TOP5 图例 ---------- */
+.chart-legend {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color, #e2e8f0);
+}
+
+.legend-caption {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #94a3b8);
+  letter-spacing: 0.04em;
+  line-height: 18px;
+  /* 与第一行图例文字基线对齐 */
+  padding-top: 1px;
+}
+
+.legend-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-primary, #1e293b);
+}
+
+.legend-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+/* 名称可能很长（如「央企红利ETF华泰柏瑞」）：截断 + title 悬浮看全名 */
+.legend-name {
+  min-width: 0;
+  max-width: 10.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend-percent {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #64748b);
 }
 </style>
