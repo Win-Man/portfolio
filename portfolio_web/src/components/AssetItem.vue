@@ -1,72 +1,116 @@
 <template>
   <tr class="asset-row" :class="{ expanded: isExpanded }">
+    <!--
+      单元格按 `columns`（可见列，且已按用户排定的顺序）动态渲染。
+      ⚠ 必须用 v-for 而不是写死顺序的 <td v-if>：
+      否则列隐藏/重排后，表头（AssetList 按 visibleColumns 渲染）与
+      本行单元格会错位——表头少了一列，单元格却没少。
+    -->
     <td
-      @click="toggleExpand"
-      class="expandable-cell name-cell"
-      :title="asset.name"
+      v-for="col in columns"
+      :key="col.key"
+      :class="cellClass(col)"
+      v-bind="cellAttrs(col)"
     >
-      <div class="name-inner">
-        <span class="expand-icon">{{ isExpanded ? '▼' : '▶' }}</span>
-        <span class="name-text">{{ asset.name }}</span>
-        <span
-          v-if="asset.asset_type && asset.asset_type !== '股票'"
-          class="asset-type-badge"
-          :class="asset.asset_type === 'ETF' ? 'type-etf' : 'type-other'"
-        >{{ asset.asset_type }}</span>
-      </div>
-    </td>
-    <td @click="toggleExpand" class="expandable-cell">{{ asset.code }}</td>
-    <td class="text-right">{{ formatQuantity(asset.quantity) }}</td>
-    <td class="text-right price-cell">
-      <span class="price-value">¥{{ formatAmount(asset.price) }}</span>
-      <span
-        v-if="sourceBadge"
-        class="source-badge"
-        :class="['source-' + sourceBadge.kind]"
-        :title="sourceBadge.hint"
-      >
-        {{ sourceBadge.label }}
-      </span>
-      <button
-        class="btn-refresh btn-sm"
-        @click.stop="$emit('refresh', asset)"
-        :disabled="refreshing"
-        title="获取最新价格"
-      >
-        {{ refreshing ? '...' : '↻' }}
-      </button>
-    </td>
-    <td class="text-right">
-      <template v-if="asset.has_cost">¥{{ formatCost(asset.cost_price) }}</template>
-      <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
-    </td>
-    <td class="text-right">¥{{ formatAmount(asset.holding_value) }}</td>
-    <td class="text-right">
-      <template v-if="asset.has_cost">
-        <div class="profit-cell" :class="profitClass">
-          {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatAmount(Math.abs(asset.profit_amount)) }}
+      <!-- 名称 -->
+      <template v-if="col.key === 'name'">
+        <div class="name-inner">
+          <span class="expand-icon">{{ isExpanded ? '▼' : '▶' }}</span>
+          <span class="name-text">{{ asset.name }}</span>
+          <span
+            v-if="asset.asset_type && asset.asset_type !== '股票'"
+            class="asset-type-badge"
+            :class="asset.asset_type === 'ETF' ? 'type-etf' : 'type-other'"
+          >{{ asset.asset_type }}</span>
         </div>
-        <!-- 成本 ≤ 0 时后端返回 percent=null（负成本的比例无意义），只显示金额 -->
-        <div v-if="asset.profit_percent !== null && asset.profit_percent !== undefined"
-             class="profit-pct" :class="profitClass">
-          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ formatAmount(asset.profit_percent) }}%
-        </div>
-        <div v-else class="profit-pct muted" title="成本 ≤ 0，盈亏比例无意义">—</div>
       </template>
-      <span v-else class="muted" title="未填成本，无法计算盈亏">—</span>
-    </td>
-    <td class="text-right">¥{{ formatAmount(asset.y2025_dividend) }}</td>
-    <td class="text-right">¥{{ formatAmount(asset.y2024_dividend) }}</td>
-    <td class="text-right highlight-yield">{{ formatAmount(asset.ttm_yield) }}%</td>
-    <td class="actions" @click.stop>
-      <button class="btn btn-secondary btn-sm" @click="$emit('edit', asset)">编辑</button>
-      <button class="btn btn-danger btn-sm" @click="$emit('delete', asset.id)">删除</button>
+
+      <!-- 代码 -->
+      <template v-else-if="col.key === 'code'">{{ asset.code }}</template>
+
+      <!-- 持股数量 -->
+      <template v-else-if="col.key === 'quantity'">
+        {{ formatQuantity(asset.quantity) }}
+      </template>
+
+      <!-- 最新价（价格 + 来源徽标 + 刷新按钮，同一行） -->
+      <template v-else-if="col.key === 'price'">
+        <span class="price-value">¥{{ formatAmount(asset.price) }}</span>
+        <span
+          v-if="sourceBadge"
+          class="source-badge"
+          :class="['source-' + sourceBadge.kind]"
+          :title="sourceBadge.hint"
+        >
+          {{ sourceBadge.label }}
+        </span>
+        <button
+          class="btn-refresh btn-sm"
+          @click.stop="$emit('refresh', asset)"
+          :disabled="refreshing"
+          title="获取最新价格"
+        >
+          {{ refreshing ? '...' : '↻' }}
+        </button>
+      </template>
+
+      <!-- 每股成本 -->
+      <template v-else-if="col.key === 'cost_price'">
+        <template v-if="asset.has_cost">¥{{ formatCost(asset.cost_price) }}</template>
+        <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
+      </template>
+
+      <!-- 持仓市值 -->
+      <template v-else-if="col.key === 'holding_value'">
+        ¥{{ formatAmount(asset.holding_value) }}
+      </template>
+
+      <!-- 盈亏（金额 + 比例） -->
+      <template v-else-if="col.key === 'profit_amount'">
+        <template v-if="asset.has_cost">
+          <div class="profit-cell" :class="profitClass">
+            {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatAmount(Math.abs(asset.profit_amount)) }}
+          </div>
+          <!-- 成本 ≤ 0 时后端返回 percent=null（负成本的比例无意义），只显示金额 -->
+          <div
+            v-if="asset.profit_percent !== null && asset.profit_percent !== undefined"
+            class="profit-pct"
+            :class="profitClass"
+          >
+            {{ asset.profit_percent >= 0 ? '+' : '' }}{{ formatAmount(asset.profit_percent) }}%
+          </div>
+          <div v-else class="profit-pct muted" title="成本 ≤ 0，盈亏比例无意义">—</div>
+        </template>
+        <span v-else class="muted" title="未填成本，无法计算盈亏">—</span>
+      </template>
+
+      <!-- 历年每股分红（按列 key 里嵌的年份取对应字段） -->
+      <template v-else-if="col.key === 'y2026_dividend'">
+        ¥{{ formatAmount(asset.y2026_dividend) }}
+      </template>
+      <template v-else-if="col.key === 'y2025_dividend'">
+        ¥{{ formatAmount(asset.y2025_dividend) }}
+      </template>
+      <template v-else-if="col.key === 'y2024_dividend'">
+        ¥{{ formatAmount(asset.y2024_dividend) }}
+      </template>
+
+      <!-- TTM 收益率 -->
+      <template v-else-if="col.key === 'ttm_yield'">
+        {{ formatAmount(asset.ttm_yield) }}%
+      </template>
+
+      <!-- 操作 -->
+      <template v-else-if="col.key === 'actions'">
+        <button class="btn btn-secondary btn-sm" @click="$emit('edit', asset)">编辑</button>
+        <button class="btn btn-danger btn-sm" @click="$emit('delete', asset.id)">删除</button>
+      </template>
     </td>
   </tr>
   
   <!-- 展开的分红历史区域 -->
   <tr v-if="isExpanded" class="dividend-detail-row">
-    <td colspan="10">
+    <td :colspan="Math.max(columns.length, 1)">
       <div class="dividend-detail">
         <div class="dividend-header">
           <h4>📊 {{ asset.name }} ({{ asset.code }}) 历年分红记录</h4>
@@ -144,10 +188,62 @@ const props = defineProps({
   refreshing: {
     type: Boolean,
     default: false
+  },
+  /**
+   * 可见列（已按用户排定的顺序），由 AssetList 传入。
+   * 本组件的单元格按它动态渲染，保证与表头逐列对齐。
+   */
+  columns: {
+    type: Array,
+    default: () => []
   }
 })
 
 defineEmits(['edit', 'delete', 'refresh'])
+
+/**
+ * 单元格的 class：数字列右对齐 + 等宽数字；名称列做截断；操作列禁止换行。
+ * 与 AssetList 表头的对齐规则保持一致。
+ */
+const NUMERIC_KEYS = new Set([
+  'quantity', 'price', 'cost_price', 'holding_value', 'profit_amount',
+  'y2026_dividend', 'y2025_dividend', 'y2024_dividend', 'ttm_yield',
+])
+
+function cellClass(col) {
+  const classes = []
+  if (NUMERIC_KEYS.has(col.key)) {
+    classes.push('text-right')
+  } else if (col.align === 'center') {
+    classes.push('text-center')
+  }
+  if (col.key === 'name') {
+    classes.push('expandable-cell', 'name-cell')
+  } else if (col.key === 'code') {
+    classes.push('expandable-cell')
+  } else if (col.key === 'price') {
+    classes.push('price-cell')
+  } else if (col.key === 'ttm_yield') {
+    classes.push('highlight-yield')
+  } else if (col.key === 'actions') {
+    classes.push('actions')
+  }
+  return classes
+}
+
+/** 单元格的额外属性：名称列加 title（悬浮看全名）、名称/代码格可点展开、操作格阻断冒泡 */
+function cellAttrs(col) {
+  if (col.key === 'name') {
+    return { title: props.asset.name, onClick: toggleExpand }
+  }
+  if (col.key === 'code') {
+    return { onClick: toggleExpand }
+  }
+  if (col.key === 'actions') {
+    return { onClick: (e) => e.stopPropagation() }
+  }
+  return {}
+}
 
 const isExpanded = ref(false)
 const dividendHistory = ref([])

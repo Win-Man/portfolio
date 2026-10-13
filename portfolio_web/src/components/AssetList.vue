@@ -76,12 +76,19 @@
             <th
               v-for="col in visibleColumns"
               :key="col.key"
+              :data-col-key="col.key"
               :class="[
                 col.align === 'right' ? 'text-right' : '',
                 col.align === 'center' ? 'text-center' : '',
-                col.sortable === false ? 'no-sort' : ''
+                col.sortable === false ? 'no-sort' : '',
+                draggingKey === col.key ? 'is-dragging' : '',
+                dropTargetKey === col.key
+                  ? (dropAfter ? 'drop-after' : 'drop-before')
+                  : ''
               ]"
-              @click="col.sortable === false ? null : sortBy(col.key)"
+              :title="'拖动表头可调整列顺序'"
+              @mousedown="onHeaderMouseDown($event, col)"
+              @click="onHeaderClick(col)"
             >
               <span class="th-inner">
                 <span class="th-label">{{ col.label }}</span>
@@ -106,6 +113,7 @@
             v-for="asset in sortedAssets" 
             :key="asset.id" 
             :asset="asset"
+            :columns="visibleColumns"
             :refreshing="refreshingId === asset.id"
             @edit="$emit('edit', asset)"
             @delete="$emit('delete', asset.id)"
@@ -164,9 +172,10 @@ const DEFAULT_COLUMNS = [
 // 「名称」虽未锁定，但实际渲染里仍显示，避免「资产列表」成无标识的空表
 const LOCKED_KEYS = new Set(['actions'])
 
-// 列宽与可见性存同一个 key（互相不冲突）—— 分开两个 key 更清晰
+// 列宽、可见性、显示顺序各存一个 key
 const STORAGE_WIDTHS_KEY = 'portfolio.assetList.colWidths.v1'
 const STORAGE_VISIBILITY_KEY = 'portfolio.assetList.visibility.v1'
+const STORAGE_ORDER_KEY = 'portfolio.assetList.order.v1'
 
 const columns = ref(DEFAULT_COLUMNS.map((c) => ({ ...c })))
 
@@ -233,6 +242,98 @@ function persistVisibility() {
   }
 }
 
+// ---------- 列顺序（拖动表头调整） ----------
+function persistOrder() {
+  try {
+    localStorage.setItem(
+      STORAGE_ORDER_KEY,
+      JSON.stringify(columns.value.map((c) => c.key))
+    )
+  } catch {
+    /* 隐私模式等 */
+  }
+}
+
+const draggingKey = ref(null)      // 正在被拖动的列
+const dropTargetKey = ref(null)    // 悬停到的目标列
+const dropAfter = ref(false)       // 插入到目标列之后（true）还是之前（false）
+// 拖动刚结束时抑制紧随其后的 click（否则会顺带触发表头排序）
+let suppressSortClick = false
+
+const draggingCol = computed(() =>
+  columns.value.find((c) => c.key === draggingKey.value) || null
+)
+
+/** 指针是否已移动足够距离（区分「点击排序」与「拖动排序」） */
+const DRAG_THRESHOLD_PX = 5
+let headerDown = null   // { key, startX }
+
+function onHeaderMouseDown(e, col) {
+  // 点在列宽拖动条上时走 resize，不进入排序拖动
+  if (e.target?.closest?.('.col-resizer')) return
+  if (e.button !== 0) return
+  headerDown = { key: col.key, startX: e.clientX }
+  window.addEventListener('mousemove', onHeaderMouseMove)
+  window.addEventListener('mouseup', onHeaderMouseUp)
+}
+
+function onHeaderMouseMove(e) {
+  if (!headerDown) return
+  if (!draggingKey.value) {
+    if (Math.abs(e.clientX - headerDown.startX) < DRAG_THRESHOLD_PX) return
+    draggingKey.value = headerDown.key
+  }
+  // 找出指针下方的表头，决定插入位置
+  const el = document.elementFromPoint(e.clientX, e.clientY)
+  const th = el?.closest?.('th')
+  const key = th?.dataset?.colKey
+  if (!key || key === draggingKey.value) {
+    dropTargetKey.value = null
+    return
+  }
+  dropTargetKey.value = key
+  const rect = th.getBoundingClientRect()
+  dropAfter.value = e.clientX > rect.left + rect.width / 2
+}
+
+function onHeaderMouseUp() {
+  window.removeEventListener('mousemove', onHeaderMouseMove)
+  window.removeEventListener('mouseup', onHeaderMouseUp)
+
+  const from = draggingKey.value
+  const to = dropTargetKey.value
+  if (from && to && from !== to) {
+    applyReorder(from, to, dropAfter.value)
+    suppressSortClick = true   // 让紧随的 click 不触发排序
+    setTimeout(() => { suppressSortClick = false }, 0)
+  }
+
+  headerDown = null
+  draggingKey.value = null
+  dropTargetKey.value = null
+  dropAfter.value = false
+}
+
+/** 把 fromKey 列移到 toKey 列的前/后（对整列数组生效，含隐藏列） */
+function applyReorder(fromKey, toKey, after) {
+  const arr = [...columns.value]
+  const fromIdx = arr.findIndex((c) => c.key === fromKey)
+  if (fromIdx < 0) return
+  const [moved] = arr.splice(fromIdx, 1)
+  let toIdx = arr.findIndex((c) => c.key === toKey)
+  if (toIdx < 0) return
+  if (after) toIdx += 1
+  arr.splice(toIdx, 0, moved)
+  columns.value = arr
+  persistOrder()
+}
+
+function onHeaderClick(col) {
+  if (suppressSortClick) return
+  if (col.sortable === false) return
+  sortBy(col.key)
+}
+
 // ---------- 列宽持久化 ----------
 onMounted(() => {
   // 列宽
@@ -254,6 +355,28 @@ onMounted(() => {
       const next = new Set(saved.filter((k) => DEFAULT_COLUMNS.some((c) => c.key === k)))
       for (const k of LOCKED_KEYS) next.add(k)
       visibleKeys.value = next
+    }
+  } catch {
+    /* 忽略 */
+  }
+  // 列顺序：按保存的 key 顺序重排 columns；
+  // 未在保存列表里的新列（如后续版本新增的字段）追加到末尾，不会被丢掉
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_ORDER_KEY) || '[]')
+    if (Array.isArray(saved) && saved.length > 0) {
+      const byKey = new Map(columns.value.map((c) => [c.key, c]))
+      const ordered = []
+      for (const k of saved) {
+        if (byKey.has(k)) {
+          ordered.push(byKey.get(k))
+          byKey.delete(k)
+        }
+      }
+      // 剩下的（新列 / 已从保存列表移除的）保持默认相对顺序追加
+      for (const c of columns.value) {
+        if (byKey.has(c.key)) ordered.push(c)
+      }
+      columns.value = ordered
     }
   } catch {
     /* 忽略 */
@@ -511,6 +634,43 @@ button:disabled {
   position: relative;
   white-space: normal;
   line-height: 1.25;
+}
+
+/* ---------- 拖动表头调整列顺序 ---------- */
+.data-table :deep(th) {
+  cursor: grab;
+}
+
+.data-table :deep(th.is-dragging) {
+  cursor: grabbing;
+  opacity: 0.45;
+}
+
+/* 插入位置指示线：贴在目标列的左/右边界 */
+.data-table :deep(th.drop-before)::before,
+.data-table :deep(th.drop-after)::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--primary-color, #2563eb);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.data-table :deep(th.drop-before)::before {
+  left: -1px;
+}
+
+.data-table :deep(th.drop-after)::after {
+  right: -1px;
+}
+
+/* 拖动排序进行中：整表禁止选中文本 */
+.data-table :deep(th.is-dragging) ~ :deep(th),
+.data-table.reordering {
+  user-select: none;
 }
 
 /*
