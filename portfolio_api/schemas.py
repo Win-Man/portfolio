@@ -9,11 +9,14 @@ class PortfolioBase(BaseModel):
 
 
 class PortfolioCreate(PortfolioBase):
-    pass
+    # 只在**写入**时收紧：PortfolioResponse 继承 PortfolioBase，
+    # 若把约束加在基类上，历史库里超长/异常的名称会让 GET 列表直接响应校验失败
+    name: str = Field(min_length=1, max_length=50)
 
 
 class PortfolioUpdate(BaseModel):
-    name: Optional[str] = None
+    # 部分更新语义：None 表示不改；给了值就必须是 1–50 字（纯空白由路由 strip 后再判）
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
 
 
 class PortfolioResponse(PortfolioBase):

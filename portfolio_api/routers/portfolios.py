@@ -22,7 +22,11 @@ def get_portfolios(db: Session = Depends(get_db)):
 
 @router.post("", response_model=PortfolioResponse)
 def create_portfolio(portfolio: PortfolioCreate, db: Session = Depends(get_db)):
-    db_portfolio = Portfolio(name=portfolio.name)
+    # 名称去首尾空白；strip 后为空 → 422（与目标名称的空值校验一致）
+    name = (portfolio.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="组合名称不能为空")
+    db_portfolio = Portfolio(name=name)
     db.add(db_portfolio)
     db.commit()
     db.refresh(db_portfolio)
@@ -45,7 +49,10 @@ def update_portfolio(
     if not db_portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     if portfolio.name is not None:
-        db_portfolio.name = portfolio.name
+        name = portfolio.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="组合名称不能为空")
+        db_portfolio.name = name
     db.commit()
     db.refresh(db_portfolio)
     return db_portfolio
