@@ -378,3 +378,56 @@ def test_etf_refresh_price_uses_trailing_ttm(client, monkeypatch, mock_tencent_o
     # 12 期 × 0.01 = 0.12（TTM），而不是最近一期 0.01
     assert body["dividend_per_share"] == pytest.approx(0.12, abs=1e-6)
     assert body["ttm_yield"] == pytest.approx(1.2, abs=0.01)
+
+
+def test_y2026_dividend_aggregated_by_natural_year(client, monkeypatch):
+    """y2026_dividend 字段按自然年汇总 2026 年内的所有分红。
+
+    验证：
+      - 跨 2025/2026/2027 三年的多期分红被正确归类
+      - 列表端点 get_assets 触发实时计算，单只端点 get_asset 不会
+    """
+    import routers.stocks as stocks_mod
+    from datetime import date, timedelta
+
+    async def fake_fetch(code):
+        today = date.today()
+        return [
+            # 2026 年内的两期：0.10 + 0.15 = 0.25
+            {"EX_DIVIDEND_DATE": date(2026, 9, 15), "DIVIDEND_PER_SHARE": 0.10,
+             "BONUS_IT_RATIO": 0, "TRANSFER_RATIO": 0,
+             "IMPLEMENT_STATUS": "已实施", "REPORT_TIME": ""},
+            {"EX_DIVIDEND_DATE": date(2026, 5, 20), "DIVIDEND_PER_SHARE": 0.15,
+             "BONUS_IT_RATIO": 0, "TRANSFER_RATIO": 0,
+             "IMPLEMENT_STATUS": "已实施", "REPORT_TIME": ""},
+            # 2025 年末：归 y2025，不归 y2026
+            {"EX_DIVIDEND_DATE": date(2025, 12, 10), "DIVIDEND_PER_SHARE": 9.99,
+             "BONUS_IT_RATIO": 0, "TRANSFER_RATIO": 0,
+             "IMPLEMENT_STATUS": "已实施", "REPORT_TIME": ""},
+            # 2027 年初：归 y2027（schema 未渲染此字段），不归 y2026
+            {"EX_DIVIDEND_DATE": date(today.year + 1, 1, 15), "DIVIDEND_PER_SHARE": 9.99,
+             "BONUS_IT_RATIO": 0, "TRANSFER_RATIO": 0,
+             "IMPLEMENT_STATUS": "已实施", "REPORT_TIME": ""},
+        ]
+    # 关键：routers.assets 用的是 from-import 拿的旧引用，
+    # 直接 patch 模块对象对它无效。改用字符串路径（monkeypatch 内部会 importlib.import_module）
+    monkeypatch.setattr("routers.stocks.fetch_dividend_from_eastmoney", fake_fetch)
+    monkeypatch.setattr("routers.assets.fetch_dividend_from_eastmoney", fake_fetch)
+    stocks_mod.invalidate_dividend_cache()
+
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "y2026测试", "code": "600900", "quantity": 100, "price": 10.0,
+    })
+    aid = r.json()["id"]
+    # 列表端点会实时调 fetch 算 y2026 合计
+    r = client.get("/api/portfolios/1/assets")
+    a = [x for x in r.json() if x["id"] == aid][0]
+    assert a["y2026_dividend"] == pytest.approx(0.25), \
+        f"2026 年合计应=0.25，实测={a['y2026_dividend']}"
+    # 不应被 2025 末或 2027 初的 9.99 污染
+    # 注：此测试覆盖了 fake_fetch 整条返回，2024 那行没有给 → y2024=0；
+    # y2024 的 0.4 由 conftest 的 mock_dividend 走另一条代码路径覆盖。
+    assert a["y2024_dividend"] == 0
+    # 单只查端点不调 fetch，y2026 字段保持 0（DB 默认）
+    r = client.get(f"/api/assets/{aid}")
+    assert r.json()["y2026_dividend"] == 0

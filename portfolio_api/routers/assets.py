@@ -163,6 +163,7 @@ async def get_assets(portfolio_id: int, db: Session = Depends(get_db)):
     result = []
     for asset in assets:
         data = await fetch_dividend_from_eastmoney(asset.code)
+        y2026 = 0.0
         y2025 = 0.0
         y2024 = 0.0
         for item in data:
@@ -174,11 +175,14 @@ async def get_assets(portfolio_id: int, db: Session = Depends(get_db)):
             else:
                 year = ""
             dividend = float(item.get("DIVIDEND_PER_SHARE") or 0)
-            if year == "2025":
+            if year == "2026":
+                y2026 += dividend
+            elif year == "2025":
                 y2025 += dividend
             elif year == "2024":
                 y2024 += dividend
         response = AssetResponse.from_orm_with_calc(asset)
+        response.y2026_dividend = y2026
         response.y2025_dividend = y2025
         response.y2024_dividend = y2024
         result.append(response)
@@ -220,6 +224,9 @@ def get_asset(asset_id: int, db: Session = Depends(get_db)):
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     return AssetResponse.from_orm_with_calc(asset)
+    # 注：y20xx_dividend 字段在 get_asset 中为 0 —— 该字段由列表端点 get_assets
+    # 按分红历史实时计算，单只查取 DB 默认值。如需单只查也算，可在此调
+    # fetch_dividend_from_eastmoney。鉴于列表场景才是主要消费场景，这里保持轻量。
 
 
 @router.put("/assets/{asset_id}", response_model=AssetResponse)

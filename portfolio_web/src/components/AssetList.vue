@@ -3,9 +3,20 @@
     <div class="card-header">
       <div class="card-title">资产列表</div>
       <div class="card-actions">
-        <button 
-          v-if="assets.length > 0" 
-          class="btn btn-primary" 
+        <button
+          v-if="assets.length > 0"
+          class="btn btn-ghost"
+          :title="showColumnPicker ? '关闭列设置' : '选择要显示的列'"
+          @click="showColumnPicker = !showColumnPicker"
+        >
+          <span class="btn-icon">⚙</span> 列设置
+          <span class="btn-count" v-if="visibleColumnCount !== DEFAULT_COLUMNS.length">
+            ({{ visibleColumnCount }}/{{ DEFAULT_COLUMNS.length }})
+          </span>
+        </button>
+        <button
+          v-if="assets.length > 0"
+          class="btn btn-primary"
           @click="$emit('refreshAll')"
           :disabled="refreshingAll"
         >
@@ -14,14 +25,42 @@
         <button class="btn btn-primary" @click="$emit('add')">+ 新增资产</button>
       </div>
     </div>
-    
+
+    <div v-if="showColumnPicker" class="column-picker">
+      <div class="column-picker-header">
+        <span class="column-picker-title">选择要显示的列</span>
+        <div class="column-picker-actions">
+          <button class="btn btn-ghost btn-sm" @click="resetColumnVisibility">恢复默认</button>
+          <button class="btn btn-ghost btn-sm" @click="hideAllColumns" :disabled="visibleColumnCount === 0">全不显示</button>
+          <button class="btn btn-ghost btn-sm" @click="showAllColumns">全选</button>
+        </div>
+      </div>
+      <div class="column-picker-list">
+        <label
+          v-for="col in DEFAULT_COLUMNS"
+          :key="col.key"
+          class="column-picker-item"
+          :class="{ 'is-disabled': isLockedColumn(col.key) }"
+        >
+          <input
+            type="checkbox"
+            :checked="isColumnVisible(col.key)"
+            :disabled="isLockedColumn(col.key)"
+            @change="toggleColumn(col.key)"
+          />
+          <span class="column-picker-label">{{ col.label }}</span>
+          <span v-if="isLockedColumn(col.key)" class="column-picker-hint">始终显示</span>
+        </label>
+      </div>
+    </div>
+
     <div v-if="loading" class="loading">加载中</div>
-    
+
     <div v-else-if="assets.length === 0" class="empty-state">
       <p>暂无资产数据</p>
       <button class="btn btn-primary" @click="$emit('add')">添加第一个资产</button>
     </div>
-    
+
     <div v-else class="table-container" :class="{ resizing: !!resizingKey }">
       <!--
         用 colgroup + table-layout: fixed 控制列宽。
@@ -30,12 +69,12 @@
       -->
       <table class="data-table" :style="{ width: totalWidth + 'px', minWidth: '100%' }">
         <colgroup>
-          <col v-for="col in columns" :key="col.key" :style="{ width: col.width + 'px' }" />
+          <col v-for="col in visibleColumns" :key="col.key" :style="{ width: col.width + 'px' }" />
         </colgroup>
         <thead>
           <tr>
             <th
-              v-for="col in columns"
+              v-for="col in visibleColumns"
               :key="col.key"
               :class="[
                 col.align === 'right' ? 'text-right' : '',
@@ -110,24 +149,95 @@ const DEFAULT_COLUMNS = [
   { key: 'cost_price',     label: '成本',         align: 'right',  width: 96,  minWidth: 86 },
   { key: 'holding_value',  label: '持仓市值',     align: 'right',  width: 110, minWidth: 100 },
   { key: 'profit_amount',  label: '盈亏',         align: 'right',  width: 112, minWidth: 100 },
-  { key: 'y2025_dividend', label: '25年每股分红', align: 'right',  width: 130, minWidth: 124 },
-  { key: 'y2024_dividend', label: '24年每股分红', align: 'right',  width: 130, minWidth: 124 },
+  { key: 'y2025_dividend', label: '25年每股分红', align: 'right',  width: 120, minWidth: 112 },
+  { key: 'y2026_dividend', label: '26年每股分红', align: 'right',  width: 120, minWidth: 112 },
+  { key: 'y2024_dividend', label: '24年每股分红', align: 'right',  width: 120, minWidth: 112 },
   { key: 'ttm_yield',      label: 'TTM收益率',    align: 'right',  width: 116, minWidth: 110 },
   { key: 'actions',        label: '操作',         align: 'center', width: 142, minWidth: 136, sortable: false, resizable: false },
 ]
 
-const STORAGE_KEY = 'portfolio.assetList.colWidths.v1'
+// ---------- 列定义与可见性状态 ----------
+// 默认：所有列都可见。「可见」是按 key 记录「是否在列设置里被勾选」
+// 的一组集合（Set），不是删除列。DEFAULT_VISIBLE_KEYS 记录在所有 checkbox
+// 都关掉时仍要保留的「锁定的」列（不让用户关掉关键标识列）。
+// 「操作」列是「全不显示」也要保留的最后一道防线：用户至少能重新打开列设置
+// 「名称」虽未锁定，但实际渲染里仍显示，避免「资产列表」成无标识的空表
+const LOCKED_KEYS = new Set(['actions'])
+
+// 列宽与可见性存同一个 key（互相不冲突）—— 分开两个 key 更清晰
+const STORAGE_WIDTHS_KEY = 'portfolio.assetList.colWidths.v1'
+const STORAGE_VISIBILITY_KEY = 'portfolio.assetList.visibility.v1'
 
 const columns = ref(DEFAULT_COLUMNS.map((c) => ({ ...c })))
 
-const totalWidth = computed(() =>
-  columns.value.reduce((sum, c) => sum + c.width, 0)
+const visibleKeys = ref(new Set(DEFAULT_COLUMNS.map((c) => c.key)))
+const showColumnPicker = ref(false)
+
+/** 实际渲染到表头/表体的列。LOCKED_KEYS 永远在内。 */
+const visibleColumns = computed(() =>
+  columns.value.filter((c) => visibleKeys.value.has(c.key))
 )
+
+const totalWidth = computed(() =>
+  visibleColumns.value.reduce((sum, c) => sum + c.width, 0)
+)
+
+// ---------- 列可见性工具 ----------
+function isColumnVisible(key) {
+  return visibleKeys.value.has(key)
+}
+
+function isLockedColumn(key) {
+  return LOCKED_KEYS.has(key)
+}
+
+function toggleColumn(key) {
+  if (LOCKED_KEYS.has(key)) return
+  const next = new Set(visibleKeys.value)
+  if (next.has(key)) {
+    // 至少保留一个列可见，避免全空导致表头丢失
+    if (next.size > 1) next.delete(key)
+  } else {
+    next.add(key)
+  }
+  visibleKeys.value = next
+  persistVisibility()
+}
+
+const visibleColumnCount = computed(() => visibleKeys.value.size)
+
+function showAllColumns() {
+  visibleKeys.value = new Set(DEFAULT_COLUMNS.map((c) => c.key))
+  persistVisibility()
+}
+
+function hideAllColumns() {
+  // LOCKED_KEYS 始终保留
+  visibleKeys.value = new Set(LOCKED_KEYS)
+  persistVisibility()
+}
+
+function resetColumnVisibility() {
+  visibleKeys.value = new Set(DEFAULT_COLUMNS.map((c) => c.key))
+  persistVisibility()
+}
+
+function persistVisibility() {
+  try {
+    localStorage.setItem(
+      STORAGE_VISIBILITY_KEY,
+      JSON.stringify([...visibleKeys.value])
+    )
+  } catch {
+    /* 隐私模式等 */
+  }
+}
 
 // ---------- 列宽持久化 ----------
 onMounted(() => {
+  // 列宽
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+    const saved = JSON.parse(localStorage.getItem(STORAGE_WIDTHS_KEY) || '{}')
     for (const col of columns.value) {
       const w = Number(saved[col.key])
       if (Number.isFinite(w) && w >= col.minWidth) col.width = Math.round(w)
@@ -135,13 +245,26 @@ onMounted(() => {
   } catch {
     /* 存储不可用或数据损坏：使用默认宽度即可 */
   }
+  // 列可见性
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_VISIBILITY_KEY) || '[]')
+    if (Array.isArray(saved) && saved.length > 0) {
+      // 尊重用户保存的选择（含「全不显示」只留锁定列的情况），
+      // 只做两件事：过滤掉已不存在的列 key、补回锁定列
+      const next = new Set(saved.filter((k) => DEFAULT_COLUMNS.some((c) => c.key === k)))
+      for (const k of LOCKED_KEYS) next.add(k)
+      visibleKeys.value = next
+    }
+  } catch {
+    /* 忽略 */
+  }
 })
 
 function persistWidths() {
   try {
     const out = {}
     for (const col of columns.value) out[col.key] = col.width
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(out))
+    localStorage.setItem(STORAGE_WIDTHS_KEY, JSON.stringify(out))
   } catch {
     /* 隐私模式等场景下忽略 */
   }
@@ -254,6 +377,114 @@ function handleRefresh(asset) {
 .card-actions {
   display: flex;
   gap: 8px;
+}
+
+.btn-icon {
+  display: inline-block;
+  margin-right: 2px;
+}
+
+.btn-count {
+  margin-left: 4px;
+  opacity: 0.7;
+  font-weight: 500;
+}
+
+/* 列选择面板：紧贴表头上方的水平条，水平排列所有列的勾选框 */
+.column-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: var(--radius, 8px);
+}
+
+.column-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.column-picker-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+}
+
+.column-picker-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.column-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.column-picker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #1e293b);
+  user-select: none;
+  transition: background 0.12s;
+}
+
+.column-picker-item:hover:not(.is-disabled) {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.column-picker-item input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.column-picker-item.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.column-picker-item.is-disabled input[type='checkbox'] {
+  cursor: not-allowed;
+}
+
+.column-picker-hint {
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+  margin-left: 2px;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-primary, #1e293b);
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: var(--primary-color, #2563eb);
+  color: var(--primary-color, #2563eb);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 拖动中：整块区域显示列宽光标并禁止选中文本 */

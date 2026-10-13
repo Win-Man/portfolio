@@ -73,7 +73,8 @@ class AssetResponse(AssetBase):
     #   0 成本会除零。此时只展示金额，前端显示「—」
     profit_percent: Optional[float] = None
     has_cost: bool = False         # 是否已填成本（NULL = 未填）
-    # 最近两年分红（从真实数据获取）
+    # 最近三年分红（从真实数据获取）
+    y2026_dividend: float = 0  # 2026年每股分红
     y2025_dividend: float = 0  # 2025年每股分红
     y2024_dividend: float = 0  # 2024年每股分红
     # 价格真实性标记 + 抓取时间

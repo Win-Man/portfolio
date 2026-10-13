@@ -31,7 +31,7 @@
 │  ③ 后端实时算的（每次请求都重算，不存）                          │
 │     - holding_value, expected_annual_income,                   │
 │       weighted_ttm_yield, total_market_value,                  │
-│       y2025_dividend, y2024_dividend,                          │
+│       y2026_dividend, y2025_dividend, y2024_dividend,          │
 │       price_source_label, price_source_hint                    │
 │                                                                │
 │  ④ 前端实时算的（仅做展示格式化）                                │
@@ -104,6 +104,7 @@
 | **成本** | DB | 直接显示 `asset.cost_price`（每股成本）。未填时前端显示「—」 |
 | **持仓市值** | **后端算** | `holding_value = quantity × price` |
 | **盈亏** | **后端算** | 见 § 3.0 |
+| 26年每股分红 | **后端算** | 见 § 3.3 |
 | 25年每股分红 | **后端算** | 见 § 3.3 |
 | 24年每股分红 | **后端算** | 见 § 3.3 |
 | **TTM 收益率** | DB | 直接显示 `asset.ttm_yield`（已经是百分比数值） |
@@ -195,6 +196,7 @@
 
 - 调 akshare 拉**完整历史分红**
 - **按除权除息日的年份**过滤：
+  - `year == "2026"` → 累加进 `y2026_dividend`
   - `year == "2025"` → 累加进 `y2025_dividend`
   - `year == "2024"` → 累加进 `y2024_dividend`
 - 累加 `dividend_per_share`（同一年可能多次分红，例如中期+末期）
@@ -290,7 +292,7 @@
 |---|---|
 | `GET /api/portfolios` | —（只返回 DB 原值） |
 | `GET /api/portfolios/{id}/summary` | `total_market_value` / `asset_count` / `weighted_ttm_yield` / `expected_annual_income` |
-| `GET /api/portfolios/{id}/assets` | `holding_value` / `expected_annual_income` / `y2025_dividend` / `y2024_dividend` / `price_source_label` / `price_source_hint` |
+| `GET /api/portfolios/{id}/assets` | `holding_value` / `expected_annual_income` / `y2026_dividend` / `y2025_dividend` / `y2024_dividend` / `price_source_label` / `price_source_hint` |
 | `GET /api/assets/{id}` | 同上 |
 | `POST /api/portfolios/{id}/assets` | 同上 |
 | `PUT /api/assets/{id}` | 同上 |
@@ -298,6 +300,35 @@
 | `POST /api/portfolios/{id}/assets/refresh-all-prices` | 同上，逐只处理 |
 | `GET /api/stocks/{code}/price` | `change` / `change_percent`（算的） |
 | `GET /api/stocks/{code}/dividend-history` | `year`（算的） |
+
+---
+
+## 8.0 资产表的列显示与列宽（纯前端，不入库）
+
+资产表支持两项用户自定义，都只存在浏览器 `localStorage`，**不影响后端与 DB**：
+
+| 能力 | 存储 key | 说明 |
+|---|---|---|
+| 列显示/隐藏 | `portfolio.assetList.visibility.v1` | 存可见列的 key 数组 |
+| 列宽 | `portfolio.assetList.colWidths.v1` | 存 `{列key: 像素宽}` |
+
+**列定义唯一来源**：`AssetList.vue` 的 `DEFAULT_COLUMNS`，每项形如
+
+```js
+{ key, label, align, width, minWidth, sortable?, resizable? }
+```
+
+- 新增一列 = 往 `DEFAULT_COLUMNS` 加一项 + 在 `AssetItem.vue` 里渲染对应 `<td>`
+- 列设置面板的**勾选项**由 `DEFAULT_COLUMNS` 自动生成，无需另外维护列表
+
+**边界规则**：
+
+| 规则 | 原因 |
+|---|---|
+| `操作` 列锁定，不可取消勾选 | 「全不显示」后用户仍能点到按钮重开列设置 |
+| `名称` 列**可**隐藏（未锁定） | 用户可能只想看数值列 |
+| 表格用 `table-layout: fixed` | `auto` 布局下 colgroup 宽度只是"建议值"，实测 180px 被内容撑成 248px，拖动不跟手 |
+| 拖动列宽有 `minWidth` 下限 | 防止把数字裁掉 |
 
 ---
 
@@ -558,7 +589,7 @@ ETF 未受影响 —— 其 TTM 走的是按日期过滤的 `_sum_trailing_12m()
 同一个页面上：
 
 - 列表列的 **TTM 收益率**（来自 DB 的 `ttm_yield`）
-- 展开后的 **历年分红**、列表的 **25年/24年每股分红**（来自实时拉取）
+- 展开后的 **历年分红**、列表的 **26/25/24年每股分红**（来自实时拉取）
 
 可能基于**不同时刻**的分红数据。
 

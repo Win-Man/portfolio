@@ -84,10 +84,10 @@ def mock_tencent_ok(monkeypatch):
 def mock_dividend(monkeypatch):
     """让 fetch_dividend_from_eastmoney 返回固定分红（并写缓存，模拟真实行为）。
 
-    返回三期，覆盖两类口径，且**与系统日期无关**：
-      - today-30d 的一期（0.5）  → 落在「滚动 12 个月」窗口内，TTM = 0.5
-      - 2025-06-15 的一期（0.5） → y2025_dividend
-      - 2024-06-15 的一期（0.4） → y2024_dividend
+    返回四期，覆盖两类口径，且**与系统日期无关**：
+      - today-30d 的一期（0.5）   → 落在「滚动 12 个月」窗口内，TTM = 0.5
+      - 2025-06-15 的一期（0.5）  → y2025_dividend
+      - 2024-06-15 的一期（0.4）  → y2024_dividend
 
     早期版本只给了写死的 2025/2024 两期：一旦系统日期推进到 2026-10 之后
     这两期都掉出 12 个月窗口，TTM 会算成 0 —— 夹具本身有时间脆弱性。
@@ -97,6 +97,7 @@ def mock_dividend(monkeypatch):
     today = date.today()
     async def fake_fetch(code):
         data = [
+            # 30 天前：落在 TTM 窗口内 → TTM += 0.5
             {"EX_DIVIDEND_DATE": today - timedelta(days=30), "DIVIDEND_PER_SHARE": 0.5,
              "BONUS_IT_RATIO": 0, "TRANSFER_RATIO": 0,
              "IMPLEMENT_STATUS": "已实施", "REPORT_TIME": ""},
