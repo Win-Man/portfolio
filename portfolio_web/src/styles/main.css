@@ -33,8 +33,8 @@ body {
 }
 
 .container {
-  max-width: 1400px;
-  margin: 0 auto;
+  /* 内容铺满整个视口宽度；靠 grid/flex/overflow 内部自行排版（卡片最大宽靠自身约束） */
+  width: 100%;
   padding: 24px;
 }
 
