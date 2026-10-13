@@ -10,7 +10,7 @@
       >{{ asset.asset_type }}</span>
     </td>
     <td @click="toggleExpand" class="expandable-cell">{{ asset.code }}</td>
-    <td class="text-right">{{ formatAmount(asset.quantity) }}</td>
+    <td class="text-right">{{ formatQuantity(asset.quantity) }}</td>
     <td class="text-right price-cell">
       <span class="price-value">¥{{ formatAmount(asset.price) }}</span>
       <span
@@ -31,7 +31,7 @@
       </button>
     </td>
     <td class="text-right">
-      <template v-if="asset.has_cost">¥{{ formatAmountOrDash(asset.cost_price) }}</template>
+      <template v-if="asset.has_cost">¥{{ formatCost(asset.cost_price) }}</template>
       <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
     </td>
     <td class="text-right">¥{{ formatAmount(asset.holding_value) }}</td>
@@ -89,8 +89,8 @@
                 <td>{{ item.year }}年</td>
                 <td>{{ item.ex_dividend_date || '-' }}</td>
                 <td class="text-right">¥{{ formatAmount(item.dividend_per_share) }}</td>
-                <td class="text-right">{{ formatAmount(item.bonus_shares) }}</td>
-                <td class="text-right">{{ formatAmount(item.transfer_shares) }}</td>
+                <td class="text-right">{{ formatQuantity(item.bonus_shares) }}</td>
+                <td class="text-right">{{ formatQuantity(item.transfer_shares) }}</td>
                 <td>
                   <span :class="['status-badge', item.status === '已实施' ? 'status-done' : 'status-pending']">
                     {{ item.status }}
@@ -181,11 +181,33 @@ function formatAmount(n) {
   })
 }
 
-/** 可为空的金额：null / NaN → 「—」（用于未填成本的场景） */
-function formatAmountOrDash(n) {
+/**
+ * 持股数量：**不强制小数位**。
+ * A 股/场内 ETF 的持股数一般就是整数，补 ".00" 只是噪音；
+ * 万一有小数（如场外基金份额）也如实显示，最多 3 位。
+ */
+function formatQuantity(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  return v.toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  })
+}
+
+/**
+ * 每股成本：**固定 3 位小数**。
+ * 真实建仓成本常带 3 位精度（如 -4.891），按 2 位显示会丢信息。
+ * 列内统一 3 位，右对齐后本列小数点照样对齐。
+ */
+function formatCost(n) {
   if (n == null) return '—'
   const v = Number(n)
-  return Number.isFinite(v) ? formatAmount(v) : '—'
+  if (!Number.isFinite(v)) return '—'
+  return v.toLocaleString('zh-CN', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  })
 }
 
 /**
