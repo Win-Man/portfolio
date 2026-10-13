@@ -10,7 +10,7 @@ portfolio/
 
 ## 功能
 
-- 多个「投资组合」管理（增删改）
+- 多个「投资组合」管理（增删改）：header 里直接 **新增 / 重命名 / 删除** 组合（删除前二次确认，会提示其下资产与目标一并删除）；一个组合都没有时给出空态引导
 - 每个组合下挂若干资产：持仓数量、当前价、每股分红、TTM 股息率等
 - **支持个股与 ETF / LOF / 封闭式基金**
   - 个股：`0`/`3`/`6`/`9` 开头，分红取最近一次已实施
@@ -93,8 +93,8 @@ npm run preview  # 预览生产构建
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET / POST | `/api/portfolios` | 组合列表 / 新增 |
-| PUT / DELETE | `/api/portfolios/{pid}` | 组合改名 / 删除（级联删除其资产与目标） |
+| GET / POST | `/api/portfolios` | 组合列表 / 新增（名称 1–50 字，自动去首尾空白，纯空白 → 422） |
+| PUT / DELETE | `/api/portfolios/{pid}` | 组合改名（同样是 1–50 字）/ 删除（级联删除其资产与目标） |
 | GET | `/api/portfolios/{pid}/summary` | 组合汇总（总市值、加权 TTM 收益率、预计年收入、成本盈亏） |
 | GET / POST | `/api/portfolios/{pid}/assets` | 资产列表 / 新增 |
 | PUT / DELETE | `/api/assets/{aid}` | 资产更新 / 删除 |
@@ -159,6 +159,7 @@ portfolio_api/
 │   ├── conftest.py
 │   ├── test_api.py     # 通用 API 测试
 │   ├── test_goals.py   # 年收入目标：CRUD / 校验 / 归属 / 级联 / 进度口径
+│   ├── test_portfolio_manage.py  # 组合新增 / 重命名 / 删除：名称校验与级联
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
@@ -178,6 +179,7 @@ portfolio_web/
     │   ├── AssetItem.vue
     │   ├── AssetForm.vue
     │   ├── GoalForm.vue          # 目标的新增 / 编辑弹窗
+    │   ├── PortfolioForm.vue     # 组合的新增 / 重命名弹窗
     │   ├── Toast.vue
     │   └── InfoTooltip.vue
     ├── utils/
@@ -198,7 +200,7 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：131 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例）
+# 后端：137 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例 / 组合管理 6 例）
 cd portfolio_api && uv run pytest -q
 
 # 前端：58 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示纯函数 18 例）

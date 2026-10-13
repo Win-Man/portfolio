@@ -134,6 +134,62 @@ export async function refreshAssetPrice(asset) {
   }
 }
 
+// ---------- 组合的写接口 ----------
+// 与上面的读接口不同：组合是用户自己维护的数据，失败必须报错，**不做假数据兜底**
+// （凭空造一个组合比直接报错更糟）。错误文案优先透传后端 detail，
+// 这样 404「Portfolio not found」之类可以直接 toast 给用户。
+
+/** 尽力从错误响应体里取出可读文案（detail 可能是字符串，也可能是 Pydantic 422 的数组） */
+async function readErrorDetail(res) {
+  try {
+    const body = await res.json()
+    const detail = body?.detail
+    if (typeof detail === 'string' && detail) return detail
+    if (Array.isArray(detail) && detail.length > 0) {
+      const first = detail[0]
+      if (typeof first === 'string' && first) return first
+      if (first && typeof first.msg === 'string' && first.msg) return first.msg
+    }
+  } catch {
+    /* 响应体不是 JSON：忽略，退回 HTTP 状态码 */
+  }
+  return ''
+}
+
+async function writeRequest(url, options) {
+  const res = await fetch(url, options)
+  if (!res.ok) {
+    const detail = await readErrorDetail(res)
+    throw new Error(detail || `HTTP ${res.status}`)
+  }
+  return await res.json()
+}
+
+/** POST /api/portfolios → PortfolioResponse */
+export async function createPortfolio(name) {
+  return writeRequest(`${API_BASE}/api/portfolios`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+}
+
+/** PUT /api/portfolios/{id} → PortfolioResponse（重命名） */
+export async function updatePortfolio(portfolioId, name) {
+  return writeRequest(`${API_BASE}/api/portfolios/${portfolioId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+}
+
+/** DELETE /api/portfolios/{id} → { message }（后端级联删除其资产与年收入目标） */
+export async function deletePortfolio(portfolioId) {
+  return writeRequest(`${API_BASE}/api/portfolios/${portfolioId}`, {
+    method: 'DELETE'
+  })
+}
+
 // 批量刷新所有资产价格
 export async function refreshAllPrices(portfolioId) {
   try {
