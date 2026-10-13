@@ -41,14 +41,13 @@ def test_create_asset_with_explicit_cost_is_respected(client):
     assert b["profit_percent"] == pytest.approx(50.0)
 
 
-def test_create_asset_with_zero_cost_falls_back_to_price(client):
-    """成本传 0 视为「未填」→ 用价格兜底（成本 0 会让盈亏比例无穷大）。"""
+def test_create_asset_with_omitted_cost_key(client):
+    """请求里完全不传 cost_price 键 → 用价格兜底。"""
     r = client.post("/api/portfolios/1/assets", json={
-        "name": "测试标的", "code": "600900",
-        "quantity": 100, "price": 18.0, "cost_price": 0,
+        "name": "测试标的", "code": "600900", "quantity": 100, "price": 16.0,
     })
     assert r.status_code == 200, r.text
-    assert r.json()["cost_price"] == pytest.approx(18.0)
+    assert r.json()["cost_price"] == pytest.approx(16.0)
 
 
 def test_create_asset_with_null_cost_falls_back_to_price(client):
@@ -176,6 +175,148 @@ def test_bulk_refresh_does_not_touch_cost(client, mock_tencent_ok, mock_dividend
     assert b["profit_amount"] == pytest.approx((10.0 - 22.0) * 100)
 
 
+# ---------- ★ 负成本（分红/高抛低吸后摊薄成本转负）----------
+
+def test_negative_cost_is_a_valid_value(client):
+    """★ 负成本必须被当作「已填」，而不是「未填」。"""
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "招商银行", "code": "600036",
+        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+    assert r.status_code == 200, r.text
+    b = r.json()
+
+    assert b["cost_price"] == pytest.approx(-4.891)
+    assert b["has_cost"] is True, "负成本是合法值，不能判定为未填"
+
+
+def test_negative_cost_computes_amount_but_suppresses_percent(client):
+    """负成本：金额照算，比例置 null（(42.8+4.891)/−4.891 = −975%，会误导）。"""
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "招商银行", "code": "600036",
+        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+    b = r.json()
+
+    # 金额： (42.80 − (−4.891)) × 100 = 4769.10
+    assert b["profit_amount"] == pytest.approx(4769.10, abs=0.01)
+    # 持仓成本为负：表示净投入已收回
+    assert b["cost_value"] == pytest.approx(-489.10, abs=0.01)
+    # 比例无意义 → null
+    assert b["profit_percent"] is None
+
+
+def test_zero_cost_is_valid_but_percent_is_null(client):
+    """显式填 0 成本（股份已全部回本）：不算「未填」，但比例置 null（除零）。"""
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "零成本", "code": "600900",
+        "quantity": 100, "price": 20.0, "cost_price": 0,
+    })
+    assert r.status_code == 200, r.text
+    b = r.json()
+
+    assert b["cost_price"] == pytest.approx(0.0), "显式填 0 不应被价格覆盖"
+    assert b["has_cost"] is True
+    assert b["profit_amount"] == pytest.approx(2000.0)
+    assert b["profit_percent"] is None
+
+
+def test_negative_cost_on_etf(client):
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "红利ETF", "code": "561580",
+        "quantity": 10000, "price": 1.286, "cost_price": -0.35,
+    })
+    b = r.json()
+    assert b["asset_type"] == "ETF"
+    assert b["has_cost"] is True
+    assert b["profit_amount"] == pytest.approx((1.286 + 0.35) * 10000, abs=0.01)
+    assert b["profit_percent"] is None
+
+
+def test_refresh_preserves_negative_cost(client, mock_tencent_ok, mock_dividend):
+    """刷新不得把负成本改写掉（成本是历史事实）。"""
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "招商银行", "code": "600036",
+        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+    aid = r.json()["id"]
+
+    client.post(f"/api/assets/{aid}/refresh-price")
+    b = client.get(f"/api/assets/{aid}").json()
+
+    assert b["cost_price"] == pytest.approx(-4.891)
+    assert b["has_cost"] is True
+    assert b["profit_percent"] is None
+
+
+def test_summary_with_negative_cost(client):
+    """负成本参与汇总，且总成本≤0 时比例置 null。"""
+    pid = client.post("/api/portfolios", json={"name": "负成本组合"}).json()["id"]
+
+    # A：成本 −4.891，现价 42.80，100 股 → 盈亏 +4769.10，成本 −489.10
+    client.post(f"/api/portfolios/{pid}/assets", json={
+        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+    # B：成本 10，现价 20，100 股 → 盈亏 +1000，成本 1000
+    client.post(f"/api/portfolios/{pid}/assets", json={
+        "name": "B", "code": "600900", "quantity": 100, "price": 20.0, "cost_price": 10.0,
+    })
+
+    s = client.get(f"/api/portfolios/{pid}/summary").json()
+
+    assert s["costed_asset_count"] == 2
+    assert s["total_cost"] == pytest.approx(-489.10 + 1000.0, abs=0.01)
+    assert s["total_profit"] == pytest.approx(4769.10 + 1000.0, abs=0.01)
+    # 总成本 510.90 > 0 → 比例可算
+    assert s["total_profit_percent"] == pytest.approx(
+        (5769.10 / 510.90) * 100, abs=0.01
+    )
+
+
+def test_summary_percent_null_when_total_cost_non_positive(client):
+    """总成本 ≤ 0 时总盈亏比例应为 null，而不是误导性的负数。"""
+    pid = client.post("/api/portfolios", json={"name": "全负成本组合"}).json()["id"]
+
+    client.post(f"/api/portfolios/{pid}/assets", json={
+        "name": "A", "code": "600036", "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+
+    s = client.get(f"/api/portfolios/{pid}/summary").json()
+
+    assert s["total_cost"] == pytest.approx(-489.10, abs=0.01)
+    assert s["total_profit"] == pytest.approx(4769.10, abs=0.01)
+    assert s["total_profit_percent"] is None
+
+
+def test_summary_skips_null_cost_but_keeps_negative(client):
+    """NULL 成本跳过；负成本保留。"""
+    from models import Asset
+    from database import SessionLocal
+
+    pid = client.post("/api/portfolios", json={"name": "混合"}).json()["id"]
+    client.post(f"/api/portfolios/{pid}/assets", json={
+        "name": "负成本", "code": "600036",
+        "quantity": 100, "price": 42.80, "cost_price": -4.891,
+    })
+    r = client.post(f"/api/portfolios/{pid}/assets", json={
+        "name": "置空", "code": "600900",
+        "quantity": 100, "price": 20.0, "cost_price": 10.0,
+    })
+    null_id = r.json()["id"]
+
+    db = SessionLocal()
+    try:
+        a = db.query(Asset).filter(Asset.id == null_id).first()
+        a.cost_price = None
+        db.commit()
+    finally:
+        db.close()
+
+    s = client.get(f"/api/portfolios/{pid}/summary").json()
+    assert s["costed_asset_count"] == 1, "只应统计负成本那条"
+    assert s["total_cost"] == pytest.approx(-489.10, abs=0.01)
+
+
 # ---------- 组合汇总 ----------
 
 def test_summary_includes_cost_and_profit(client):
@@ -241,14 +382,15 @@ def test_summary_skips_assets_without_cost(client):
     assert no_cost["has_cost"] is False
     assert no_cost["cost_price"] is None
     assert no_cost["profit_amount"] == pytest.approx(0.0)
-    assert no_cost["profit_percent"] == pytest.approx(0.0)
+    # 未填成本时比例也不适用
+    assert no_cost["profit_percent"] is None
 
 
 def test_summary_no_cost_at_all(client):
-    """全都没成本时，总盈亏为 0 而不是报错。"""
+    """全都没成本时，总盈亏为 0、比例为 null 而不是报错。"""
     pid = client.post("/api/portfolios", json={"name": "空组合"}).json()["id"]
     s = client.get(f"/api/portfolios/{pid}/summary").json()
     assert s["total_cost"] == 0
     assert s["total_profit"] == 0
-    assert s["total_profit_percent"] == 0
+    assert s["total_profit_percent"] is None
     assert s["costed_asset_count"] == 0

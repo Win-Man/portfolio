@@ -20,7 +20,11 @@
         </div>
         <template v-if="hasCost">
           <div class="value">{{ sign }}¥{{ formatNumber(Math.abs(totalProfit)) }}</div>
-          <div class="sub">{{ sign }}{{ (summary?.total_profit_percent || 0).toFixed(2) }}%</div>
+          <!-- 总成本 ≤ 0 时后端返回 percent=null（无意义），此时只展示金额 -->
+          <div v-if="hasPercent" class="sub">
+            {{ sign }}{{ summary.total_profit_percent.toFixed(2) }}%
+          </div>
+          <div v-else class="sub">成本 ≤ 0，比例不适用</div>
         </template>
         <template v-else>
           <div class="value">—</div>
@@ -59,6 +63,10 @@ const props = defineProps({
 
 const totalProfit = computed(() => Number(props.summary?.total_profit) || 0)
 const hasCost = computed(() => (props.summary?.costed_asset_count || 0) > 0)
+const hasPercent = computed(() => {
+  const v = props.summary?.total_profit_percent
+  return v !== null && v !== undefined
+})
 
 const sign = computed(() => (totalProfit.value >= 0 ? '+' : '−'))
 

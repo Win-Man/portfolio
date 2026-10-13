@@ -40,9 +40,12 @@
         <div class="profit-cell" :class="profitClass">
           {{ asset.profit_amount >= 0 ? '+' : '' }}¥{{ formatNumber(Math.abs(asset.profit_amount)) }}
         </div>
-        <div class="profit-pct" :class="profitClass">
-          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ (asset.profit_percent || 0).toFixed(2) }}%
+        <!-- 成本 ≤ 0 时后端返回 percent=null（负成本的比例无意义），只显示金额 -->
+        <div v-if="asset.profit_percent !== null && asset.profit_percent !== undefined"
+             class="profit-pct" :class="profitClass">
+          {{ asset.profit_percent >= 0 ? '+' : '' }}{{ asset.profit_percent.toFixed(2) }}%
         </div>
+        <div v-else class="profit-pct muted" title="成本 ≤ 0，盈亏比例无意义">—</div>
       </template>
       <span v-else class="muted" title="未填成本，无法计算盈亏">—</span>
     </td>

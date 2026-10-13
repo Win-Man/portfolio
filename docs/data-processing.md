@@ -115,22 +115,41 @@
 
 | 场景 | 行为 |
 |---|---|
-| 新增资产时填了成本 | 用填的值 |
-| 新增资产时**没填**（null / 空 / 0） | 后端用当时的 `price` 兜底 → 相当于「刚建仓」，盈亏为 0 |
+| 新增资产时填了成本 | 用填的值（**含 0 与负数**，都是合法值） |
+| 新增资产时**完全没填**（键缺失 / `null`） | 后端用当时的 `price` 兜底 → 相当于「刚建仓」，盈亏为 0 |
 | 编辑资产 | 用 `exclude_unset`，不传则保留原值 |
 | **刷新价格（单只 / 批量）** | **绝不改写成本** —— 成本是历史事实，已用测试锁住 |
 
+> `NULL` 是「未填」的唯一标识。`0` 与负数都是用户**显式填写的真实成本**，不会被兜底覆盖。
+
 盈亏由后端算出（`schemas.AssetResponse.from_orm_with_calc`），不落库：
 
-| 字段 | 公式 |
-|---|---|
-| `cost_value` | `quantity × cost_price`（持仓成本） |
-| `profit_amount` | `(price − cost_price) × quantity` |
-| `profit_percent` | `(price − cost_price) / cost_price × 100` |
-| `has_cost` | `cost_price is not None and cost_price > 0` |
+| 字段 | 公式 | 负成本时 |
+|---|---|---|
+| `cost_value` | `quantity × cost_price` | 负数 —— 表示净投入已收回 |
+| `profit_amount` | `(price − cost_price) × quantity` | ✅ 正常计算 |
+| `profit_percent` | `(price − cost_price) / cost_price × 100` | ❌ **返回 `null`** |
+| `has_cost` | `cost_price is not None` | `true` |
 
-`has_cost = False` 时（成本为 NULL 或 0），三个数值字段一律返回 0，前端显示「—」。
-前端表单里成本默认跟随「最新价」自动填充，**一旦用户手动改过成本就不再覆盖**（见 `AssetForm.vue` 的 `costTouched`）。
+#### 为什么 `cost_price ≤ 0` 时不给百分比
+
+**负成本在 A 股是常见且合理的**：长期持有后累计分红超过买入价，或反复高抛低吸摊薄成本，
+都会让成本转负（券商 App 里叫「摊薄成本」）。
+
+但比例公式在负成本下会给出**误导性结果**：
+
+```
+招商银行：现价 42.80，成本 −4.891
+(42.80 − (−4.891)) / (−4.891) × 100 = −975%     ← 明明是赚的，却显示 -975%
+```
+
+分母为负时比值失去经济含义；`cost_price = 0` 则直接除零。
+因此 `cost_price ≤ 0` 时 `profit_percent` 返回 `null`，**前端显示「—」，只展示盈亏金额**。
+
+`has_cost = False`（成本为 NULL）时，`cost_value` / `profit_amount` 返回 0，`profit_percent` 返回 `null`。
+
+前端表单里成本默认跟随「最新价」自动填充，**一旦用户手动改过成本就不再覆盖**
+（见 `AssetForm.vue` 的 `costTouched`）。成本输入框**不设 `min`**，允许输入负数。
 
 > ⚠ **配色是 A 股语义**：**红涨绿跌**，与欧美相反。盈利显示红色，亏损显示绿色。
 > 前端 `.profit-up` / `.profit-down` 与概览卡片底色均按此约定，代码里有注释标注，不要"顺手改成绿色盈利"。
@@ -200,9 +219,10 @@
 
 > **重要边界**：
 > - 组合内无资产 → `weighted_ttm_yield = 0.0`（避免除零）
-> - **总盈亏只统计 `cost_price` 有值的标的**（`costed_asset_count` 记录参与计算的条数），
+> - **总盈亏只统计 `cost_price` 非 NULL 的标的**（`costed_asset_count` 记录参与计算的条数），
 >   否则成本未填的标的会被当成零成本，把总盈亏算得虚高
-> - `total_cost = 0` 时 `total_profit_percent = 0`（避免除零）
+>   - 注意判断条件是 `is not None`：**负成本是合法值，必须计入**
+> - `total_cost ≤ 0` 时 `total_profit_percent = null`（负分母会让比例失去意义，见 §3.0）
 
 
 ---

@@ -104,8 +104,7 @@
               <input 
                 v-model.number="form.cost_price" 
                 type="number" 
-                min="0"
-                step="0.01"
+                step="0.001"
                 placeholder="留空则按最新价格"
                 @input="costTouched = true"
               />
@@ -114,6 +113,7 @@
                 <template v-else-if="profitPreview !== null">
                   盈亏 {{ profitPreview >= 0 ? '+' : '' }}{{ profitPreview.toFixed(2) }}%
                 </template>
+                <template v-else-if="isNegativeCost">成本 ≤ 0，仅按金额计算盈亏</template>
               </div>
             </div>
           </div>
@@ -221,8 +221,15 @@ const costTouched = ref(false)
 const profitPreview = computed(() => {
   const p = Number(form.value.price)
   const c = Number(form.value.cost_price)
+  // 成本 ≤ 0 时比例无意义（负成本会算出误导性的负百分比），只展示金额
   if (!p || !c || c <= 0) return null
   return ((p - c) / c) * 100
+})
+
+/** 成本为负（分红/高抛低吸后摊薄成本转负）——合法，但比例不展示 */
+const isNegativeCost = computed(() => {
+  const c = Number(form.value.cost_price)
+  return Number.isFinite(c) && c < 0
 })
 
 // 最新价变化时，若成本未被手动改过则跟随

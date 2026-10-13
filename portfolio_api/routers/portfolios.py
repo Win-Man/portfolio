@@ -77,13 +77,17 @@ def get_portfolio_summary(portfolio_id: int, db: Session = Depends(get_db)):
 
     expected_annual_income = sum(a.quantity * a.dividend_per_share for a in assets)
 
-    # 成本与盈亏：只统计**已填成本**的标的（cost_price 为 None 或 0 的跳过），
-    # 否则未填成本的标的会被当成零成本，把总盈亏算得虚高
-    costed = [a for a in assets if a.cost_price]
+    # 成本与盈亏：只统计**已填成本**的标的（cost_price 为 NULL 的跳过），
+    # 否则未填成本的标的会被当成零成本，把总盈亏算得虚高。
+    # 注意用 `is not None`：负成本（分红/高抛低吸后摊薄成本转负）是合法值，不能被排除。
+    costed = [a for a in assets if a.cost_price is not None]
     total_cost = sum(a.quantity * a.cost_price for a in costed)
     costed_market_value = sum(a.quantity * a.price for a in costed)
     total_profit = costed_market_value - total_cost
-    total_profit_percent = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+    # 总成本 ≤ 0 时百分比无意义（负数会给出误导性的负百分比，0 会除零）
+    total_profit_percent = (
+        (total_profit / total_cost * 100) if total_cost > 0 else None
+    )
 
     return PortfolioSummary(
         total_market_value=total_market_value,

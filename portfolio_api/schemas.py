@@ -66,10 +66,13 @@ class AssetResponse(AssetBase):
     holding_value: float = 0
     expected_annual_income: float = 0
     # 成本与盈亏（后端算，不落库）
-    cost_value: float = 0          # 持仓成本 = quantity × cost_price
+    cost_value: float = 0          # 持仓成本 = quantity × cost_price（可为负）
     profit_amount: float = 0       # 浮动盈亏 = (price − cost_price) × quantity
-    profit_percent: float = 0      # 盈亏比例 = (price − cost_price) / cost_price × 100
-    has_cost: bool = False         # 是否已填成本（未填时前端显示「—」）
+    # 盈亏比例 = (price − cost_price) / cost_price × 100
+    # ⚠ cost_price ≤ 0 时为 None：负成本算出来是负数（明明赚钱却显示负百分比），
+    #   0 成本会除零。此时只展示金额，前端显示「—」
+    profit_percent: Optional[float] = None
+    has_cost: bool = False         # 是否已填成本（NULL = 未填）
     # 最近两年分红（从真实数据获取）
     y2025_dividend: float = 0  # 2025年每股分红
     y2024_dividend: float = 0  # 2024年每股分红
@@ -91,11 +94,15 @@ class AssetResponse(AssetBase):
         label, hint = _source_to_label_hint(source, fetched_at)
 
         cost_price = getattr(asset, "cost_price", None)
-        has_cost = cost_price is not None and cost_price > 0
+        # 只把 NULL 当「未填」——负成本是合法值（分红/高抛低吸后摊薄成本转负），
+        # 0 也是用户显式填的值
+        has_cost = cost_price is not None
         cost_value = (asset.quantity * cost_price) if has_cost else 0.0
         profit_amount = ((asset.price - cost_price) * asset.quantity) if has_cost else 0.0
+        # cost_price ≤ 0 时百分比无意义（负数会给出误导性的负百分比，0 会除零）
         profit_percent = (
-            (asset.price - cost_price) / cost_price * 100 if has_cost else 0.0
+            (asset.price - cost_price) / cost_price * 100
+            if has_cost and cost_price > 0 else None
         )
 
         return cls(
@@ -144,6 +151,7 @@ class PortfolioSummary(BaseModel):
     # 成本与盈亏汇总（只统计已填成本的标的）
     total_cost: float = 0
     total_profit: float = 0
-    total_profit_percent: float = 0
+    # 总成本 ≤ 0（例如整体成本被分红摊成负）时为 None，此时百分比无意义
+    total_profit_percent: Optional[float] = None
     costed_asset_count: int = 0
     description: str = "基于当前持股计算的汇总数据"
