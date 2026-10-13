@@ -2,8 +2,8 @@
   <div>
     <div class="overview-grid">
       <div class="overview-item">
-        <div class="label">总市值</div>
-        <div class="value">¥{{ formatNumber(summary?.total_market_value) }}</div>
+        <div class="label">资产总额</div>
+        <div class="value">¥{{ formatAmount(summary?.total_market_value) }}</div>
       </div>
       <div class="overview-item">
         <div class="label">资产数量</div>
@@ -12,14 +12,14 @@
       </div>
       <div class="overview-item" :class="profitClass">
         <div class="label">
-          总盈亏
+          持仓盈亏
           <InfoTooltip
             v-if="hasCost"
             :text="`已填成本的 ${summary?.costed_asset_count || 0} 项标的，(现价 − 成本) × 持股数 汇总`"
           />
         </div>
         <template v-if="hasCost">
-          <div class="value">{{ sign }}¥{{ formatNumber(Math.abs(totalProfit)) }}</div>
+          <div class="value">{{ sign }}¥{{ formatAmount(Math.abs(totalProfit)) }}</div>
           <!-- 总成本 ≤ 0 时后端返回 percent=null（无意义），此时只展示金额 -->
           <div v-if="hasPercent" class="sub">
             {{ sign }}{{ summary.total_profit_percent.toFixed(2) }}%
@@ -40,7 +40,7 @@
       </div>
       <div class="overview-item">
         <div class="label">预计年收入</div>
-        <div class="value">¥{{ formatNumber(summary?.expected_annual_income) }}</div>
+        <div class="value">¥{{ formatAmount(summary?.expected_annual_income) }}</div>
         <div class="sub">股息收益</div>
       </div>
     </div>
@@ -53,6 +53,7 @@
 <script setup>
 import { computed } from 'vue'
 import InfoTooltip from './InfoTooltip.vue'
+import { formatAmount } from '../utils/format'
 
 const props = defineProps({
   summary: {
@@ -80,12 +81,4 @@ const profitClass = computed(() => {
   if (totalProfit.value < 0) return 'profit-down'
   return 'profit-flat'
 })
-
-function formatNumber(num) {
-  if (num == null) return '0.00'
-  if (Math.abs(num) >= 10000) {
-    return (num / 10000).toFixed(2) + '万'
-  }
-  return num.toFixed(2)
-}
 </script>

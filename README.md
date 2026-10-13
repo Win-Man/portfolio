@@ -169,7 +169,7 @@ portfolio_web/
 # 后端：112 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效）
 cd portfolio_api && uv run pytest -q
 
-# 前端：26 个用例（饼图数据整理、格式化、悬浮提示）
+# 前端：34 个用例（数字格式化、饼图数据整理、悬浮提示）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）

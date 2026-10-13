@@ -4,7 +4,7 @@
       title="持仓市值分布"
       :items="valueItems"
       :color-map="colorMap"
-      total-label="总市值"
+      total-label="资产总额"
       empty-text="暂无持仓市值数据"
     />
     <ChartPie

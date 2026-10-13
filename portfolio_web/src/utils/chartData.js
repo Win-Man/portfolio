@@ -83,14 +83,6 @@ export function stableNameOrder(assets, primaryPick) {
   return agg.sort((a, b) => b.value - a.value).map((d) => d.name)
 }
 
-/** 数字格式化：≥1万 用「万」，否则千分位 */
-export function formatCompact(num) {
-  if (num == null || Number.isNaN(num)) return '0'
-  if (Math.abs(num) >= 10000) return (num / 10000).toFixed(2) + '万'
-  if (Math.abs(num) >= 1000) return Number(num).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
-  return Number(num).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-}
-
 /** 数字格式化：精确到分，带千分位 */
 export function formatExact(num) {
   return Number(num || 0).toLocaleString('zh-CN', {

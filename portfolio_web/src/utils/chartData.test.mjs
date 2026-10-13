@@ -12,7 +12,6 @@ import {
   buildSlices,
   buildTooltipHtml,
   escapeHtml,
-  formatCompact,
   formatExact,
   stableNameOrder,
   truncate,
@@ -161,19 +160,6 @@ test('stableNameOrder 排除 0 值项', () => {
 })
 
 // ---------- 格式化 ----------
-
-test('formatCompact 用「万」表示大额', () => {
-  assert.equal(formatCompact(79786), '7.98万')
-  assert.equal(formatCompact(10000), '1.00万')
-  assert.equal(formatCompact(4047.25), '4,047')
-  assert.equal(formatCompact(999), '999')
-  assert.equal(formatCompact(0), '0')
-  assert.equal(formatCompact(null), '0')
-})
-
-test('formatCompact 负数也走「万」', () => {
-  assert.equal(formatCompact(-20000), '-2.00万')
-})
 
 test('formatExact 保留两位小数与千分位', () => {
   assert.equal(formatExact(79786), '79,786.00')

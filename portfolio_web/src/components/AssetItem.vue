@@ -179,6 +179,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { getDividendHistory } from '../api/stock.js'
+import { formatAmount, formatQuantity, formatCost } from '../utils/format'
 
 const props = defineProps({
   asset: {
@@ -268,49 +269,6 @@ const sourceBadge = computed(() => {
   return { kind: src, label: labels[src] || src, hint: hints[src] || src }
 })
 
-/**
- * 统一数字格式：千分位 + 固定 2 位小数。
- *
- * 刻意**不用「万」**：同一列里混用 "1.25万" 与 "5,830.00" 会让宽度参差不齐，
- * 右对齐也救不回来（小数点对不齐）。统一 2 位小数后，右对齐即可让小数点列成一条线。
- */
-function formatAmount(n) {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return '0.00'
-  return v.toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}
-
-/**
- * 持股数量：**不强制小数位**。
- * A 股/场内 ETF 的持股数一般就是整数，补 ".00" 只是噪音；
- * 万一有小数（如场外基金份额）也如实显示，最多 3 位。
- */
-function formatQuantity(n) {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return '0'
-  return v.toLocaleString('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 3,
-  })
-}
-
-/**
- * 每股成本：**固定 3 位小数**。
- * 真实建仓成本常带 3 位精度（如 -4.891），按 2 位显示会丢信息。
- * 列内统一 3 位，右对齐后本列小数点照样对齐。
- */
-function formatCost(n) {
-  if (n == null) return '—'
-  const v = Number(n)
-  if (!Number.isFinite(v)) return '—'
-  return v.toLocaleString('zh-CN', {
-    minimumFractionDigits: 3,
-    maximumFractionDigits: 3,
-  })
-}
 
 /**
  * 盈亏配色：A 股惯例是「红涨绿跌」，与欧美相反。

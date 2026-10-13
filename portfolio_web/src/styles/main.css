@@ -158,6 +158,8 @@ body {
   background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
   border-radius: var(--radius);
   color: white;
+  /* 建立容器查询上下文，供 .value 按卡片宽度缩放字号（见下） */
+  container-type: inline-size;
 }
 
 .overview-item.highlight {
@@ -183,8 +185,20 @@ body {
   margin-bottom: 4px;
 }
 
+/*
+  卡片主数值。
+  - 显示完整数字后（不再用「万」）字符串可能很长，固定 24px 在窄卡片里会折行，
+    金额折成两行很难看 → 用容器查询按卡片宽度缩放字号：
+    宽卡片封顶 24px，窄卡片自动降到约 16px，保证千万级金额也能单行放下。
+  - cqw 基于卡片**内容盒**，故 8.5cqw 在 286px 内容宽时正好取到 24px 上限。
+  - tabular-nums：等宽数字，多张卡片/多行之间数字不跳动。
+  - nowrap：金额绝不折行。
+*/
 .overview-item .value {
-  font-size: 24px;
+  font-size: clamp(15px, 8.5cqw, 24px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.35;
   font-weight: 700;
 }
 

@@ -4,7 +4,7 @@
       <div class="chart-title">{{ title }}</div>
       <div v-if="total > 0" class="chart-total">
         <span class="chart-total-label">{{ totalLabel }}</span>
-        <span class="chart-total-value">{{ unit }}{{ formatCompact(total) }}</span>
+        <span class="chart-total-value">{{ unit }}{{ formatAmount(total) }}</span>
       </div>
     </div>
 
@@ -32,8 +32,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   buildSlices,
   buildTooltipHtml,
-  formatCompact,
 } from '../utils/chartData.js'
+import { formatAmount } from '../utils/format.js'
 import { MISC_COLOR, pickColor } from '../utils/chartColors.js'
 
 echarts.use([PieChart, TooltipComponent, CanvasRenderer])
