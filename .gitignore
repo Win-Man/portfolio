@@ -71,5 +71,9 @@ portfolio_api/portfolio.db
 portfolio_api/stock_cache.json
 portfolio_api/.venv/
 
+# 验收 / 调试截图：里面是**真实持仓与金额**（标的名称、份额、分红金额），
+# 仓库可能公开，不入库；本地保留，只在需要时手动查看
+docs/screenshots/
+
 # uv 锁文件如果暂不想跟踪可加（保留是因为团队协作时应该跟）
 # uv.lock
