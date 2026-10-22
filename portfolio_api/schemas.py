@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
-from datetime import datetime
-from typing import Optional, Literal
+from datetime import date, datetime
+from typing import List, Literal, Optional
 
 
 # Portfolio schemas
@@ -227,3 +227,107 @@ class GoalProgressResponse(BaseModel):
     asset_count: int
     has_mock_price: bool
     calc_note: str                             # 无异常时为空串
+
+
+# ---------- 收入日历（income calendar） ----------
+
+DividendStatus = Literal["predicted", "announced", "paid", "manual"]
+
+
+class CalendarMonth(BaseModel):
+    year: int
+    month: int                                 # 1..12
+    total_amount: float                        # 该月合计 = Σ(quantity × dividend_per_share)
+    count: int                                 # 该月笔数
+    # 四个状态键恒定存在（无该状态则为 0），前端可直接画图 / 上色
+    by_status: dict[str, float]
+    # 八个来源大类键恒定存在："stock"/"etf"/"bond"/"otc"/"reit"/"custom"/"self"/"manual"
+    by_source: dict[str, float]
+    # 该月合计里「去年同期预估」占的部分（total_amount 已包含它）
+    estimated_amount: float = 0
+
+
+class CalendarResponse(BaseModel):
+    portfolio_id: int
+    year: int
+    months: List[CalendarMonth]                # 恒为 12 个月（1..12）
+    total_year: float
+    total_count: int
+    # 组合内资产数（= 0 时前端显示「该组合暂无资产」空态）
+    asset_count: int
+    # 近 12 个月（今天往前 365 天，含今天）**已到账**分红合计。
+    # 口径与概览卡「预计年收入」（= Σ 持股数 × 每股 TTM 分红）一致：
+    # 自然年合计与之不同是正常的（窗口不同 + 未来月份 akshare 尚未收录），
+    # 两个数字同屏展示，用户才能自己核对，而不是以为哪里算错了。
+    rolling_12m_total: float = 0
+    rolling_12m_count: int = 0
+    # 「去年同期预估」合计（akshare 尚未收录的未来月份，用去年同月实际分红投影得到）。
+    # 它**包含在** total_year 里；recorded_total = total_year − estimated_total 是纯已收录部分。
+    # 预估只影响展示，不影响 rolling_12m_total（那个只看已到账）。
+    estimated_total: float = 0
+    recorded_total: float = 0
+
+
+class MonthDividendItem(BaseModel):
+    code: str
+    name: str
+    asset_id: int
+    portfolio_id: int
+    portfolio_name: str
+    asset_type: str
+    ex_date: date
+    dividend_per_share: float                  # 原始每股分红（不是 TTM 合计）
+    quantity: float
+    amount: float                              # = quantity × dividend_per_share
+    status: DividendStatus
+    source: str                                # 与 by_source 同分类
+    is_confirmed: bool                         # 是否已被用户 confirm 过
+    is_manual: bool                            # 是否手动补录
+    is_mock_price: bool = False                # 该标的的 price_source == "mock"（月 Sheet 提示）
+    is_estimated: bool = False                 # 「去年同期预估」项（不是 akshare / 补录的真实记录）
+    note: str = ""
+
+
+class MonthDividendsResponse(BaseModel):
+    portfolio_id: int
+    year: int
+    month: int
+    total_amount: float
+    count: int
+    items: List[MonthDividendItem]
+
+
+class DividendConfirmCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    ex_date: date
+
+
+class DividendConfirmResponse(BaseModel):
+    code: str
+    ex_date: date
+    status: DividendStatus
+    confirmed_at: datetime
+
+
+class ManualDividendCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    ex_date: date
+    amount_per_share: float = Field(gt=0)
+    note: Optional[str] = Field(default=None, max_length=200)
+    # 白名单外 → 422；缺省即「补录」语义
+    status: Optional[DividendStatus] = None
+
+
+class ManualDividendResponse(BaseModel):
+    id: int
+    portfolio_id: int
+    asset_id: int
+    code: str
+    ex_date: date
+    amount_per_share: float
+    status: DividendStatus
+    note: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

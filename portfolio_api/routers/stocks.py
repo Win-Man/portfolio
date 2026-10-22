@@ -151,6 +151,25 @@ async def fetch_dividend_from_eastmoney(stock_code: str) -> List[dict]:
     return results
 
 
+async def fetch_all_dividend_records(stock_code: str) -> List[dict]:
+    """获取该标的**全部历史**分红原始记录（供「收入日历」按 ex_date 归月使用）。
+
+    与 fetch_dividend_from_eastmoney 是同一份数据、同一个 in-memory 缓存
+    （``_dividend_cache``，TTL 6h）—— 这里只是语义化的读入口，**不另起缓存**：
+    日历需要全部历史（1970 年至今所有期），而 TTM 口径只关心滚动 12 个月。
+
+    契约：**永不抛异常**。akshare 网络失败时沿用 fetch_dividend_from_eastmoney
+    的「回退到 6h 旧缓存」逻辑；完全无缓存则返回空列表，调用方跳过该标的即可，
+    不能让单只标的的抓取失败把整个 calendar 接口拖成 500。
+    """
+    try:
+        records = await fetch_dividend_from_eastmoney(stock_code)
+    except Exception as e:  # pragma: no cover - 兜底，正常路径不会走到
+        logger.warning("获取全部分红记录失败 [%s]: %s", stock_code, e)
+        return []
+    return records or []
+
+
 def _fetch_stock_dividend_blocking(stock_code: str) -> tuple[bool, List[dict]]:
     """个股分红：akshare.stock_dividend_cninfo。
 
