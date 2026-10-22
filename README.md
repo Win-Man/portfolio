@@ -1,6 +1,6 @@
 # Portfolio · 投资组合管理
 
-一个轻量的 A 股投资组合与分红透视工具。后端用 FastAPI + SQLite，前端是 Vue 3 + Vite。
+一个轻量的 A 股投资组合与分红透视工具。后端用 FastAPI + SQLite，前端是 Vue 3 + Vite（路由用 vue-router 的 hash 模式）。
 
 ```
 portfolio/
@@ -29,6 +29,14 @@ portfolio/
   - 目标绑定组合（切换组合只看该组合的目标、删除组合级联删除目标）；同组合内重名返回 409；「上次选中的目标」按组合记在 localStorage，手填的假设收益率不记
 - **列表可自定义**：「列设置」勾选要显示的列；拖动表头调整列顺序；拖动列边界调整宽度（双击复位）；三项设置都持久化到浏览器
 - 历年分红展开表（含 24 / 25 / 26 年每股分红列）、按字段排序
+- **收入日历**（header 第二个 tab，`#/calendar`）：按当前组合看一整年的分红现金流
+  - **年视图**：Q1–Q4 × 3 月的网格，每格显示当月合计金额 + 笔数 + 状态色点（已到账 / 已公告 / 预测 / 补录 / 无）
+  - **月视图**：12 根**按来源堆叠**的柱（股 / ETF / 债 / OTC / REITs / 自定义 / 自建 / 补录）+ 顶部「年度累计」折线
+  - 点月份 → 底部 70vh **月 Sheet** 列出该月逐笔：标的、类型、派息日、金额、状态
+  - 每笔支持「**点击确认**」（把预告标成已到账，幂等、不加金额）与「**+ 补录**」（手动新增一笔，不能补未来日期）
+  - 数据与「TTM / 历年分红」共用同一份 akshare 分红缓存，按派息日归月；akshare 只收录**已发生**的分红，因此未来月份用「**去年同期预估**」补上（标记「预估」，与已收录分开统计）
+  - 顶部同时给出 `{年}年合计`（= 已收录 + 预估）、`已收录 / 预估` 拆分、以及 `近 12 个月`（与概览卡「预计年收入」同口径，两者相等），一眼看清「自然年合计」为什么和「预计年收入」不同
+  - 没有任何去年同期记录可参照的未来月份，显示 ¥0.00 并标注「待收录」（不外推）
 
 > 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
 
@@ -106,6 +114,22 @@ npm run preview  # 预览生产构建
 目标接口的错误约定：组合不存在 → `404 Portfolio not found`；目标不存在或不属于该组合 → `404 Goal not found`；名称为纯空白 / 金额 ≤ 0 / `assumed_yield` 越界 → `422`；同组合重名 → `409 同名目标已存在`。
 所有「无意义」的数值（如市值为 0 时的所需收益率）返回 `null` 而不是 `0`，前端显示「—」。
 
+### 收入日历
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/portfolios/{pid}/calendar?year=2026` | 年度日历：恒 12 个月（合计 / 笔数 / `by_status` / `by_source` / `estimated_amount`）+ `total_year` / `total_count` / `asset_count`；`recorded_total` = 已收录、`estimated_total` = 去年同期预估（`total_year = recorded_total + estimated_total`）；`rolling_12m_total` = 近 12 个月已到账合计（口径与概览「预计年收入」一致）；`year` 省略则取当年 |
+| GET | `/api/portfolios/{pid}/calendar/{year}/{month}` | 单月逐笔明细（`items[]`：标的、派息日、每股分红、持股数、金额、状态、来源、是否已确认 / 补录 / 模拟价 / **预估** `is_estimated`） |
+| POST | `/api/portfolios/{pid}/dividends/confirm` | body `{code, ex_date}` → 把该笔标成已到账（**幂等**，重复调用不改 `confirmed_at`、不加金额）；找不到该笔 → 404 |
+| POST | `/api/portfolios/{pid}/dividends/manual` | body `{code, ex_date, amount_per_share, note?}` → 201 新增一笔补录；未来日期 / 金额 ≤ 0 / 标的不在组合内 → 422 |
+| GET | `/api/portfolios/{pid}/dividends/manual` | 该组合的全部补录记录 |
+| DELETE | `/api/portfolios/{pid}/dividends/manual/{record_id}` | 删除补录；记录不存在或不属于该组合 → 404 |
+
+状态口径：`paid`（akshare `IMPLEMENT_STATUS` 含「已实施」）/ `announced`（含「已发布」「实施中」）/ `predicted`（其余，含缺失，保守）/ `manual`（补录）。
+来源口径：`manual` → 补录；ETF/基金代码 → `etf`；`asset_type` 含「债」/「OTC」/「REITs」/「自建」/「自定义」→ `bond`/`otc`/`reit`/`self`/`custom`；其余 → `stock`。
+金额 = 持股数 × 该期每股分红；同 `(code, ex_date)` 时补录**覆盖** akshare 记录；`cost_price` 不参与本功能。
+**去年同期预估**：把最近 12 个月内的每一笔真实记录 +1 年投影到未来月份（月份严格晚于当前月、且该标的该月没有真实记录时才生成），`is_estimated=true`、状态记为 `predicted`，只计入 `total_year` / `estimated_total`，**不**计入 `rolling_12m_total`（已到账口径），也不能「点击确认」。
+
 ## 数据源说明
 
 | 数据 | 来源 | 备注 |
@@ -148,17 +172,19 @@ portfolio_api/
 ├── database.py         # SQLAlchemy
 ├── models.py           # ORM
 ├── schemas.py          # Pydantic
-├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记），summary 与目标进度共用
+├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记 / 分红状态与来源归类）
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── routers/
 │   ├── portfolios.py   # 组合 CRUD + summary
 │   ├── assets.py       # 资产 CRUD + 刷新价格 + TTM 计算
 │   ├── goals.py        # 年收入目标 CRUD + 进度计算
-│   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派）
+│   ├── calendar.py     # 收入日历：按派息日归月 + 确认 / 补录
+│   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派，含分红 in-memory 缓存）
 ├── tests/
 │   ├── conftest.py
 │   ├── test_api.py     # 通用 API 测试
 │   ├── test_goals.py   # 年收入目标：CRUD / 校验 / 归属 / 级联 / 进度口径
+│   ├── test_calendar.py          # 收入日历：聚合 / 状态映射 / 确认幂等 / 补录 / 边界
 │   ├── test_portfolio_manage.py  # 组合新增 / 重命名 / 删除：名称校验与级联
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
@@ -168,13 +194,20 @@ portfolio_web/
 ├── scripts/
 │   └── verify-chart-tooltip.mjs  # 用 CDP 验证饼图悬浮提示
 └── src/
-    ├── App.vue
-    ├── views/Portfolio.vue
+    ├── App.vue                   # 应用外壳：tab 切换 + 组合选择器 + 组合管理
+    ├── router.js                 # vue-router（hash 模式）：/ 与 /calendar
+    ├── views/
+    │   ├── Portfolio.vue
+    │   └── CalendarView.vue      # ★ 收入日历（年/月视图 + 月 Sheet + 确认 / 补录）
     ├── components/
     │   ├── PortfolioOverview.vue
     │   ├── PortfolioGoals.vue    # ★ 年收入目标区块（进度条 / 两条路径 / 假设收益率）
     │   ├── PortfolioCharts.vue   # 两张分布饼图（容器）
     │   ├── ChartPie.vue          # 可复用饼图组件（ECharts 封装）
+    │   ├── YearGrid.vue          # ★ 年视图：Q1–Q4 × 3 月网格
+    │   ├── MonthlyStackedBarChart.vue  # ★ 月视图：来源堆叠柱 + 年度累计折线（ECharts）
+    │   ├── MonthSheet.vue        # ★ 月底部 Sheet：逐笔明细
+    │   ├── ManualDividendForm.vue      # ★ 补录行内表单
     │   ├── AssetList.vue
     │   ├── AssetItem.vue
     │   ├── AssetForm.vue
@@ -187,12 +220,17 @@ portfolio_web/
     │   ├── chartData.test.mjs
     │   ├── goal.js               # 目标展示纯函数（月均 / 进度宽度 / 记忆选中）
     │   ├── goal.test.mjs
+    │   ├── calendar.js           # 日历纯函数（分月分箱 / 状态与来源归类 / 累计折线 / 堆叠柱数据）
+    │   ├── calendar.test.mjs
+    │   ├── calendarColors.js     # 日历配色（8 类来源 + 状态点 + 选中格）
     │   └── chartColors.js        # 跨图共享配色
     ├── composables/
-    │   └── useToast.js
+    │   ├── useToast.js
+    │   └── usePortfolioContext.js  # 两个 tab 共享选中组合（provide/inject + localStorage）
     ├── api/
     │   ├── portfolio.js
     │   ├── goal.js               # 目标接口（无假数据兜底，透传后端 detail）
+    │   ├── calendar.js           # 日历 / 确认 / 补录接口（同上）
     │   └── stock.js
     └── styles/main.css
 ```
@@ -200,10 +238,10 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：137 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例 / 组合管理 6 例）
+# 后端：157 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例 / 组合管理 6 例 / 收入日历 20 例）
 cd portfolio_api && uv run pytest -q
 
-# 前端：58 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示纯函数 18 例）
+# 前端：73 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示 18 例、日历纯函数 15 例）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）
