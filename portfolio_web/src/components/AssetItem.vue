@@ -35,7 +35,7 @@
 
       <!-- 最新价（价格 + 来源徽标 + 刷新按钮，同一行） -->
       <template v-else-if="col.key === 'price'">
-        <span class="price-value">¥{{ formatAmount(asset.price) }}</span>
+        <span class="price-value">¥{{ formatPrice(asset.price, asset.asset_type) }}</span>
         <span
           v-if="sourceBadge"
           class="source-badge"
@@ -179,7 +179,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { getDividendHistory } from '../api/stock.js'
-import { formatAmount, formatQuantity, formatCost } from '../utils/format'
+import { formatAmount, formatPrice, formatQuantity, formatCost } from '../utils/format'
 
 const props = defineProps({
   asset: {

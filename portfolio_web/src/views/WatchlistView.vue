@@ -134,7 +134,7 @@
 
                   <td class="wl-num">
                     <template v-if="row.price !== null">
-                      ¥{{ formatAmount(row.price) }}
+                      ¥{{ formatPrice(row.price, row.asset_type) }}
                     </template>
                     <template v-else>
                       <span class="wl-muted">—</span>
@@ -154,7 +154,7 @@
 
                   <td class="wl-num">
                     <template v-if="row.yield_trigger_price !== null">
-                      {{ formatAmount(row.yield_trigger_price) }}
+                      {{ formatPrice(row.yield_trigger_price, row.asset_type) }}
                     </template>
                     <span v-else class="wl-muted" title="无分红数据，无法按股息率定价">—</span>
                   </td>
@@ -165,7 +165,7 @@
 
                   <td class="wl-num">
                     <template v-if="row.target_price !== null">
-                      {{ formatAmount(row.target_price) }}
+                      {{ formatPrice(row.target_price, row.asset_type) }}
                     </template>
                     <span v-else class="wl-muted">未设</span>
                   </td>
@@ -283,6 +283,7 @@
                         :snapshots="snapshots"
                         :target-yield="row.target_yield"
                         :ex-dividends="exDividends"
+                        :asset-type="row.asset_type"
                         :loading="snapshotsLoading"
                       />
                     </div>
@@ -320,7 +321,7 @@ import { useRouter } from 'vue-router'
 
 import WatchlistForm from '../components/WatchlistForm.vue'
 import { toast } from '../composables/useToast.js'
-import { formatAmount, formatCost } from '../utils/format.js'
+import { formatAmount, formatCost, formatPrice } from '../utils/format.js'
 import {
   alignExDividends,
   defaultCustomRange,

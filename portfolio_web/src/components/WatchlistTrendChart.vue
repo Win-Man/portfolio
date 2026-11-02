@@ -25,6 +25,7 @@ import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } f
 import { CanvasRenderer } from 'echarts/renderers'
 
 import { buildTrendSeries, alignExDividends, formatChartTip, spanDays } from '../utils/watchlist.js'
+import { formatPrice, priceDigits } from '../utils/format.js'
 import { LINE_COLORS, MARK_COLORS } from '../utils/watchlistColors.js'
 
 echarts.use([
@@ -56,6 +57,14 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  /**
+   * 标的类型（"ETF" / "股票"）：决定价格显示 3 位还是 2 位小数。
+   * ETF 的最小价格变动是 0.001，按 2 位会把 1.523 画成/写成 1.52。
+   */
+  assetType: {
+    type: String,
+    default: '',
+  },
   loading: {
     type: Boolean,
     default: false,
@@ -72,6 +81,9 @@ const targetYieldValue = computed(() => {
   const n = Number(props.targetYield)
   return Number.isFinite(n) && n > 0 ? n : null
 })
+
+/** 价格轴刻度：位数与 tooltip / 表格一致，避免轴上是 1.52 而提示里是 1.523 */
+const priceAxisFormatter = (v) => Number(v).toFixed(priceDigits(props.assetType))
 
 /** 除权日对齐到当前窗口的横轴（只保留窗口内的，顺延到最近有数据的交易日） */
 const exMarks = computed(() => alignExDividends(series.value.dates, props.exDividends))
@@ -101,15 +113,21 @@ const axisLabelFormatter = computed(() => {
   }
 })
 
-/** 统一展示精度：股息率与价格都保留 2 位小数（与轴标签、表格一致）。 */
+/**
+ * 统一展示精度：股息率固定 2 位小数；价格按标的类型给 2 或 3 位
+ * （ETF 的报价精度是 0.001，按 2 位会把 1.523 写成 1.52）。
+ */
 function tooltipFormatter(params) {
   if (!Array.isArray(params) || params.length === 0) return ''
   const index = params[0].dataIndex
   const date = series.value.dates[index] ?? ''
   const lines = params.map((item) => {
-    const text = formatChartTip(item.value)
+    const isPrice = item.seriesName === '价格'
+    const text = isPrice
+      ? formatPrice(item.value, props.assetType)
+      : formatChartTip(item.value)
     let shown = '—'
-    if (text !== '—') shown = item.seriesName === '价格' ? `¥${text}` : `${text}%`
+    if (text !== '—') shown = isPrice ? `¥${text}` : `${text}%`
     return `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${item.color};margin-right:6px"></span>${item.seriesName} ${shown}`
   })
 
@@ -223,7 +241,8 @@ function buildOption() {
         axisLabel: {
           color: LINE_COLORS.price,
           fontSize: 11,
-          formatter: (v) => Number(v).toFixed(2),
+          // 价格轴跟随标的精度：ETF 3 位（1.520），股票 2 位（8.57）
+          formatter: priceAxisFormatter,
         },
       },
     ],

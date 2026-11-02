@@ -89,9 +89,9 @@
               <input 
                 v-model.number="form.price" 
                 type="number" 
-                min="0.01"
-                step="0.01"
-                placeholder="例如：35.50"
+                min="0.001"
+                step="0.001"
+                placeholder="例如：35.50 / 1.523"
                 required
               />
               <div v-if="errors.price" class="error">{{ errors.price }}</div>

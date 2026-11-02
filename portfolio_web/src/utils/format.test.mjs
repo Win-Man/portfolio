@@ -13,7 +13,9 @@ import {
   formatAmount,
   formatQuantity,
   formatCost,
+  formatPrice,
   formatSigned,
+  priceDigits,
 } from './format.js'
 
 test('formatAmount：千分位 + 固定 2 位小数，不用「万」', () => {
@@ -78,4 +80,61 @@ test('formatSigned：正数补 +，负数用 Unicode 减号 −', () => {
 
 test('formatSigned：可传入自定义格式化函数（如成本用 3 位）', () => {
   assert.equal(formatSigned(-4.891, formatCost), '−4.891')
+})
+
+// ---------------------------------------------------------------- 价格精度
+
+test('priceDigits：ETF 3 位、股票 2 位，类型缺省按股票', () => {
+  assert.equal(priceDigits('ETF'), 3)
+  assert.equal(priceDigits('股票'), 2)
+  // 老数据 / 手动录入可能没带类型
+  assert.equal(priceDigits(''), 2)
+  assert.equal(priceDigits(null), 2)
+  assert.equal(priceDigits(undefined), 2)
+  // 后端 asset_type 是自由字符串，非「股票」的其它类型（基金/LOF）都按 3 位
+  assert.equal(priceDigits('LOF'), 3)
+})
+
+test('formatPrice：ETF 保留 3 位小数，不能把 1.523 写成 1.52', () => {
+  // 这条是原始 bug：513530 现价 1.523 曾被格式化成 1.52
+  assert.equal(formatPrice(1.523, 'ETF'), '1.523')
+  assert.equal(formatPrice(1.295, 'ETF'), '1.295')
+  assert.equal(formatPrice(0.8727272727272728, 'ETF'), '0.873')  // 触发价四舍五入到 3 位
+  // 价格本身只有 2 位精度时补零到 3 位，保证同列小数点对齐
+  assert.equal(formatPrice(1.5, 'ETF'), '1.500')
+  assert.equal(formatPrice(1.05, 'ETF'), '1.050')
+})
+
+test('formatPrice：股票仍是 2 位，不给 8.57 补成 8.570', () => {
+  assert.equal(formatPrice(8.57, '股票'), '8.57')
+  assert.equal(formatPrice(52.8, '股票'), '52.80')
+  assert.equal(formatPrice(1234.5, '股票'), '1,234.50')
+})
+
+test('formatPrice：类型已知时严格按类型位数（触发价这类计算值不能被推到 3 位）', () => {
+  // 触发价 = TTM DPS / 目标股息率，天然带一长串小数；
+  // 若按「数值精度」判断，股票的触发价会永远显示 3 位（42.857）
+  assert.equal(formatPrice(42.857142857142854, '股票'), '42.86')
+  assert.equal(formatPrice(49.63636363636363, '股票'), '49.64')
+  // ETF 的触发价仍是 3 位
+  assert.equal(formatPrice(1.4545454545454546, 'ETF'), '1.455')
+  assert.equal(formatPrice(2.1818181818181817, 'ETF'), '2.182')
+})
+
+test('formatPrice：类型缺失但数值确实带 3 位小数时，仍按 3 位显示', () => {
+  // 宁可多一位，也不要因为类型字段丢失而显示一个错的价格
+  assert.equal(formatPrice(1.523, null), '1.523')
+  assert.equal(formatPrice('1.523'), '1.523')
+  // 2 位精度的值在类型缺失时退回 2 位
+  assert.equal(formatPrice(8.57, null), '8.57')
+})
+
+test('formatPrice：无效值给「—」而不是假的 0.00', () => {
+  assert.equal(formatPrice(null, 'ETF'), '—')
+  assert.equal(formatPrice(undefined, 'ETF'), '—')
+  assert.equal(formatPrice('', 'ETF'), '—')
+  assert.equal(formatPrice(NaN, 'ETF'), '—')
+  assert.equal(formatPrice('abc', 'ETF'), '—')
+  // 0 是有效价格，不该当成「无数据」
+  assert.equal(formatPrice(0, '股票'), '0.00')
 })
