@@ -221,6 +221,26 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 - 同一 `trade_date` 最多尝试 **3 轮**，避免数据源整体挂掉时每分钟重试一整天。
 - **单 worker 限制**：`uvicorn --workers N`（N > 1）时每个进程都会跑这个循环 —— 同一天的快照靠唯一约束 + UPSERT 幂等，不会写重，但会**重复抓取**同一标的。本期不做跨进程锁，生产部署请用单 worker，或把定时抓取挪到外部调度。
 
+#### 与「投资组合」页共用的视觉骨架
+
+观察池和投资组合是同一套设计语言，**样式定义只有一份**，都在 `src/styles/main.css`：
+
+| 区块 | 共用类 | 两页的落点 |
+|---|---|---|
+| 顶部 KPI 卡 | `.overview-grid` / `.overview-item`（`.highlight` 绿、默认蓝渐变） | 资产总额、加权收益率… ｜ 标的总数、股息率达标… |
+| 卡片骨架 | `.card` + `.card-header` + `.card-title` + `.card-actions` | 资产列表 / 年收入目标 ｜ 观察标的 |
+| 次级按钮 | `.btn-ghost`（透明底 + 描边） | 列设置 ｜ 刷新全部 |
+| 表格 | `.data-table`（14px、12px 内边距、浅底表头、悬停高亮） | 资产列表 ｜ 观察标的 |
+| 行内操作 | `.btn.btn-secondary.btn-sm` / `.btn.btn-danger.btn-sm` | 编辑 / 删除 ｜ 刷新 / 转入持仓 / 编辑 / 删除 |
+| 加载 / 空态 | `.loading` / `.empty-state` / `.empty-hint` | 两页一致 |
+
+只有「这张表特有」的东西留在 `WatchlistView.vue` 的 scoped 样式里：陈旧行的黄条、两条信号徽标、除权日图例、时间维度切换、自定义区间选择器。
+
+两处刻意统一的交互细节：
+
+- **展开入口**：观察池点「标的名称」展开走势，用的是资产列表点名称展开分红历史的同一个 ▶/▼ 手势，因此操作列不再单独占一个「走势」按钮，四条按钮的宽度与资产列表的两条按钮同一密度。
+- **类型徽标**：只在非「股票」时打标（ETF 橙 / 其他灰），尺寸与资产列表的 `.asset-type-badge` 完全一致，`已持有` 标签也用同一套圆角与字号，并排时不打架。
+
 
 ## 数据源说明
 
@@ -296,7 +316,7 @@ portfolio_web/
     ├── views/
     │   ├── Portfolio.vue
     │   ├── CalendarView.vue      # ★ 收入日历（年/月视图 + 月 Sheet + 确认 / 补录）
-    │   └── WatchlistView.vue     # ★ 观察池（工具条 + 汇总卡 + 表格 + 展开行双轴走势）
+    │   └── WatchlistView.vue     # ★ 观察池（KPI 汇总卡 + 「观察标的」卡片 + 表格 + 展开行双轴走势）
     ├── components/
     │   ├── PortfolioOverview.vue
     │   ├── PortfolioGoals.vue    # ★ 年收入目标区块（进度条 / 两条路径 / 假设收益率）

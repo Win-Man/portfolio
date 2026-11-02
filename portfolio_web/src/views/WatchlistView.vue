@@ -1,276 +1,297 @@
 <template>
   <div class="wl-page">
     <main class="container">
-      <!-- 工具条 -->
-      <div class="wl-toolbar">
-        <div>
-          <h1 class="wl-title">观察池</h1>
-          <p class="wl-subtitle">候选标的 · 达标信号每日收盘后更新</p>
+      <!--
+        汇总卡：直接复用「投资组合」页的 .overview-grid / .overview-item。
+        原先这里是四个白底描边卡，与组合页顶部的彩色 KPI 卡观感割裂，
+        统一后两页的第一屏视觉锚点完全一致。
+      -->
+      <div class="overview-grid">
+        <div class="overview-item">
+          <div class="label">标的总数</div>
+          <div class="value">{{ summary.total }}</div>
+          <div class="sub">个候选标的</div>
         </div>
-        <div class="wl-toolbar-actions">
-          <button
-            type="button"
-            class="btn btn-secondary btn-sm"
-            :disabled="refreshingAll || loading"
-            @click="handleRefreshAll"
-          >
-            <span v-if="refreshingAll" class="wl-spinner"></span>
-            {{ refreshingAll ? '刷新中...' : '刷新全部' }}
-          </button>
-          <button type="button" class="btn btn-primary btn-sm" @click="openAddForm">
-            ＋ 新增标的
-          </button>
+        <div class="overview-item highlight">
+          <div class="label">股息率达标</div>
+          <div class="value">{{ summary.yieldHitCount }}</div>
+          <div class="sub">共 {{ summary.total }} 项</div>
         </div>
-      </div>
-
-      <!-- 汇总卡 -->
-      <div class="wl-summary">
-        <div class="wl-summary-card">
-          <div class="wl-summary-label">标的总数</div>
-          <div class="wl-summary-value">{{ summary.total }}</div>
+        <div class="overview-item">
+          <div class="label">价格达标</div>
+          <div class="value">{{ summary.priceHitCount }}</div>
+          <div class="sub">已设目标价 {{ summary.priceTargetedCount }} 项</div>
         </div>
-        <div class="wl-summary-card">
-          <div class="wl-summary-label">股息率达标</div>
-          <div class="wl-summary-value wl-tone-hit">{{ summary.yieldHitCount }}</div>
-          <div class="wl-summary-sub">共 {{ summary.total }} 项</div>
-        </div>
-        <div class="wl-summary-card">
-          <div class="wl-summary-label">价格达标</div>
-          <div class="wl-summary-value wl-tone-hit">{{ summary.priceHitCount }}</div>
-          <div class="wl-summary-sub">
-            已设目标价 {{ summary.priceTargetedCount }} 项
+        <div class="overview-item">
+          <div class="label">数据日期</div>
+          <div class="value">{{ summary.latestSnapshotDate || '待抓取' }}</div>
+          <div class="sub">
+            <template v-if="summary.staleCount > 0">含 {{ summary.staleCount }} 项陈旧</template>
+            <template v-else>全部为最新快照</template>
           </div>
         </div>
-        <div class="wl-summary-card">
-          <div class="wl-summary-label">数据日期</div>
-          <div class="wl-summary-value wl-summary-date">
-            {{ summary.latestSnapshotDate || '待抓取' }}
+      </div>
+
+      <!-- 说明行：与组合页 .overview-desc 同一位置、同一观感（那边放的是汇总口径说明） -->
+      <div class="overview-desc">
+        {{ summary.total }} 个候选标的 · 达标信号每日收盘后自动抓取，不参与任何组合汇总
+      </div>
+
+      <!-- 与「资产列表」同一套卡片骨架：标题在左、操作在右 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">观察标的</div>
+          <div class="card-actions">
+            <button
+              type="button"
+              class="btn btn-ghost"
+              :disabled="refreshingAll || loading"
+              @click="handleRefreshAll"
+            >
+              <span v-if="refreshingAll" class="wl-spinner"></span>
+              {{ refreshingAll ? '刷新中...' : '↻ 刷新全部' }}
+            </button>
+            <button type="button" class="btn btn-primary" @click="openAddForm">
+              ＋ 新增标的
+            </button>
           </div>
-          <div v-if="summary.staleCount > 0" class="wl-summary-sub wl-tone-near">
-            含 {{ summary.staleCount }} 项陈旧
-          </div>
-          <div v-else class="wl-summary-sub">全部为最新快照</div>
         </div>
-      </div>
 
-      <!-- 错误态：不做假数据兜底 -->
-      <div v-if="error" class="wl-error">
-        <span>{{ error }}</span>
-        <button type="button" class="btn btn-secondary btn-sm" @click="loadItems">重试</button>
-      </div>
-
-      <!-- 首屏骨架 -->
-      <div v-else-if="loading" class="wl-card">
-        <div v-for="n in 5" :key="n" class="wl-skeleton-row">
-          <span class="wl-skeleton-block wl-skeleton-name"></span>
-          <span class="wl-skeleton-block"></span>
-          <span class="wl-skeleton-block"></span>
-          <span class="wl-skeleton-block"></span>
+        <!-- 错误态：不做假数据兜底 -->
+        <div v-if="error" class="wl-error">
+          <span>{{ error }}</span>
+          <button type="button" class="btn btn-secondary btn-sm" @click="loadItems">重试</button>
         </div>
-      </div>
 
-      <!-- 空态 -->
-      <div v-else-if="items.length === 0" class="wl-card wl-empty">
-        <div class="wl-empty-icon">🎯</div>
-        <p class="wl-empty-title">还没有观察标的</p>
-        <p class="wl-empty-hint">先去搜索一个你想买的红利标的（代码或名称），设好目标股息率</p>
-        <button type="button" class="btn btn-primary" @click="openAddForm">＋ 新增标的</button>
-      </div>
+        <!-- 首屏加载：与「资产列表」共用同一个 .loading，不再单独维护一套骨架屏 -->
+        <div v-else-if="loading" class="loading">加载中</div>
 
-      <!-- 表格 -->
-      <div v-else class="wl-card wl-table-wrap">
-        <table class="wl-table">
-          <thead>
-            <tr>
-              <th>标的</th>
-              <th class="wl-num">现价</th>
-              <th class="wl-num">TTM 分红</th>
-              <th class="wl-num">当前股息率</th>
-              <th class="wl-num">目标股息率</th>
-              <th class="wl-num">距目标</th>
-              <th class="wl-num">触发价</th>
-              <th class="wl-num">距触发价</th>
-              <th class="wl-num">目标价</th>
-              <th>信号</th>
-              <th>数据日期</th>
-              <th class="wl-actions-col">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-for="row in displayItems" :key="row.id">
-              <tr :class="{ 'wl-row-stale': row.is_stale, 'wl-row-open': expandedId === row.id }">
-                <td class="wl-name-cell">
-                  <div class="wl-name-line">
-                    <span class="wl-name">{{ row.name }}</span>
-                    <span
-                      v-if="row.is_held"
-                      class="wl-chip-held"
-                      :title="`已在组合：${row.held_portfolios.join('、')}`"
-                    >已持有</span>
-                  </div>
-                  <div class="wl-code-line">
-                    <span class="wl-code">{{ row.code }}</span>
-                    <span class="wl-type">{{ row.asset_type }}</span>
-                    <span v-if="row.refresh_error" class="wl-refresh-error" :title="row.refresh_error">
-                      · {{ row.refresh_error }}
-                    </span>
-                  </div>
-                </td>
+        <!-- 空态：与组合页同一套 .empty-state -->
+        <div v-else-if="items.length === 0" class="empty-state">
+          <p>还没有观察标的</p>
+          <p class="empty-hint">先去搜索一个你想买的红利标的（代码或名称），设好目标股息率</p>
+          <button type="button" class="btn btn-primary" @click="openAddForm">＋ 新增标的</button>
+        </div>
 
-                <td class="wl-num">
-                  <template v-if="row.price !== null">
-                    ¥{{ formatAmount(row.price) }}
-                  </template>
-                  <template v-else>
-                    <span class="wl-muted">—</span>
-                    <span class="wl-pending">待抓取</span>
-                  </template>
-                </td>
+        <!-- 表格：套用全局 .data-table，字号 / 内边距 / 表头底色与资产列表完全一致 -->
+        <div v-else class="table-container">
+          <table class="data-table wl-table">
+            <thead>
+              <tr>
+                <th>标的</th>
+                <th class="wl-num">现价</th>
+                <th class="wl-num">TTM 分红</th>
+                <th class="wl-num">当前股息率</th>
+                <th class="wl-num">目标股息率</th>
+                <th class="wl-num">距目标</th>
+                <th class="wl-num">触发价</th>
+                <th class="wl-num">距触发价</th>
+                <th class="wl-num">目标价</th>
+                <th>信号</th>
+                <th>数据日期</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="row in displayItems" :key="row.id">
+                <tr :class="{ 'wl-row-stale': row.is_stale, 'wl-row-open': expandedId === row.id }">
+                  <!--
+                    名称格承担「展开走势」：与资产列表里点名称展开分红历史是同一个手势，
+                    所以用同一个 ▶/▼ 折叠图标，不再在操作列单独占一个「走势」按钮。
+                  -->
+                <td
+                  class="wl-name-cell"
+                  role="button"
+                  tabindex="0"
+                  :aria-expanded="expandedId === row.id"
+                  :title="expandedId === row.id ? '收起走势' : '展开走势'"
+                  @click="toggleTrend(row)"
+                  @keydown.enter.prevent="toggleTrend(row)"
+                  @keydown.space.prevent="toggleTrend(row)"
+                >
+                    <div class="wl-name-line">
+                      <span class="wl-expand-icon">{{ expandedId === row.id ? '▼' : '▶' }}</span>
+                      <span class="wl-name">{{ row.name }}</span>
+                      <span
+                        v-if="row.is_held"
+                        class="wl-chip-held"
+                        :title="`已在组合：${row.held_portfolios.join('、')}`"
+                      >已持有</span>
+                    </div>
+                    <div class="wl-code-line">
+                      <span class="wl-code">{{ row.code }}</span>
+                      <!-- 类型徽标：与资产列表一致，只有非个股才打标（股票是默认类型） -->
+                      <span
+                        v-if="row.asset_type !== '股票'"
+                        class="wl-type"
+                        :class="row.asset_type === 'ETF' ? 'wl-type-etf' : 'wl-type-other'"
+                      >{{ row.asset_type }}</span>
+                      <span v-if="row.refresh_error" class="wl-refresh-error" :title="row.refresh_error">
+                        · {{ row.refresh_error }}
+                      </span>
+                    </div>
+                  </td>
 
-                <td class="wl-num">
-                  <template v-if="row.ttm_dividend > 0">{{ formatCost(row.ttm_dividend) }}</template>
-                  <span v-else class="wl-muted">无分红</span>
-                </td>
+                  <td class="wl-num">
+                    <template v-if="row.price !== null">
+                      ¥{{ formatAmount(row.price) }}
+                    </template>
+                    <template v-else>
+                      <span class="wl-muted">—</span>
+                      <span class="wl-pending">待抓取</span>
+                    </template>
+                  </td>
 
-                <td class="wl-num">{{ formatYield(row.current_yield) }}</td>
-                <td class="wl-num">{{ formatYield(row.target_yield) }}</td>
+                  <td class="wl-num">
+                    <template v-if="row.ttm_dividend > 0">{{ formatCost(row.ttm_dividend) }}</template>
+                    <span v-else class="wl-muted">无分红</span>
+                  </td>
 
-                <td class="wl-num">{{ formatGapPercent(row.yield_gap_points, ' pct') }}</td>
+                  <td class="wl-num">{{ formatYield(row.current_yield) }}</td>
+                  <td class="wl-num">{{ formatYield(row.target_yield) }}</td>
 
-                <td class="wl-num">
-                  <template v-if="row.yield_trigger_price !== null">
-                    {{ formatAmount(row.yield_trigger_price) }}
-                  </template>
-                  <span v-else class="wl-muted" title="无分红数据，无法按股息率定价">—</span>
-                </td>
+                  <td class="wl-num">{{ formatGapPercent(row.yield_gap_points, ' pct') }}</td>
 
-                <td class="wl-num">
-                  {{ formatGapPercent(row.yield_trigger_gap_percent, '%') }}
-                </td>
+                  <td class="wl-num">
+                    <template v-if="row.yield_trigger_price !== null">
+                      {{ formatAmount(row.yield_trigger_price) }}
+                    </template>
+                    <span v-else class="wl-muted" title="无分红数据，无法按股息率定价">—</span>
+                  </td>
 
-                <td class="wl-num">
-                  <template v-if="row.target_price !== null">
-                    {{ formatAmount(row.target_price) }}
-                  </template>
-                  <span v-else class="wl-muted">未设</span>
-                </td>
+                  <td class="wl-num">
+                    {{ formatGapPercent(row.yield_trigger_gap_percent, '%') }}
+                  </td>
 
-                <td>
-                  <div class="wl-signals">
-                    <span class="wl-badge" :style="signalBadgeStyle(row.yield_signal)">
-                      股息率 · {{ signalLabel(row.yield_signal) }}
-                    </span>
-                    <span class="wl-badge" :style="signalBadgeStyle(row.price_signal)">
-                      价格 · {{ signalLabel(row.price_signal) }}
-                    </span>
-                  </div>
-                </td>
+                  <td class="wl-num">
+                    <template v-if="row.target_price !== null">
+                      {{ formatAmount(row.target_price) }}
+                    </template>
+                    <span v-else class="wl-muted">未设</span>
+                  </td>
 
-                <td class="wl-date-cell">
-                  <template v-if="row.snapshot_date">
-                    {{ row.snapshot_date }}
-                    <span
-                      v-if="row.is_stale"
-                      class="wl-stale-flag"
-                      :title="`数据 ${row.stale_days} 天前`"
-                    >⚠ 数据 {{ row.stale_days }} 天前</span>
-                  </template>
-                  <span v-else class="wl-muted">—</span>
-                </td>
+                  <td>
+                    <div class="wl-signals">
+                      <span class="wl-badge" :style="signalBadgeStyle(row.yield_signal)">
+                        股息率 · {{ signalLabel(row.yield_signal) }}
+                      </span>
+                      <span class="wl-badge" :style="signalBadgeStyle(row.price_signal)">
+                        价格 · {{ signalLabel(row.price_signal) }}
+                      </span>
+                    </div>
+                  </td>
 
-                <td class="wl-actions-col">
-                  <div class="wl-row-actions">
-                    <button type="button" class="wl-link" @click="toggleTrend(row)">
-                      {{ expandedId === row.id ? '收起' : '走势' }}
-                    </button>
+                  <td class="wl-date-cell">
+                    <template v-if="row.snapshot_date">
+                      {{ row.snapshot_date }}
+                      <span
+                        v-if="row.is_stale"
+                        class="wl-stale-flag"
+                        :title="`数据 ${row.stale_days} 天前`"
+                      >⚠ 数据 {{ row.stale_days }} 天前</span>
+                    </template>
+                    <span v-else class="wl-muted">—</span>
+                  </td>
+
+                  <td class="actions">
                     <button
                       type="button"
-                      class="wl-link"
+                      class="btn btn-secondary btn-sm"
                       :disabled="refreshingIds.has(row.id)"
                       @click="handleRefreshOne(row)"
                     >
                       {{ refreshingIds.has(row.id) ? '刷新中' : '刷新' }}
                     </button>
-                    <button type="button" class="wl-link" @click="handleTransfer(row)">转入持仓</button>
-                    <button type="button" class="wl-link" @click="openEditForm(row)">编辑</button>
-                    <button type="button" class="wl-link wl-link-danger" @click="handleDelete(row)">
-                      删除
-                    </button>
-                  </div>
-                </td>
-              </tr>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      @click="handleTransfer(row)"
+                    >转入持仓</button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      @click="openEditForm(row)"
+                    >编辑</button>
+                    <button
+                      type="button"
+                      class="btn btn-danger btn-sm"
+                      @click="handleDelete(row)"
+                    >删除</button>
+                  </td>
+                </tr>
 
-              <!-- 展开行：双轴走势图，一次只展开一个 -->
-              <tr v-if="expandedId === row.id" class="wl-expand-row">
-                <td :colspan="COLUMN_COUNT">
-                  <div class="wl-expand">
-                    <div class="wl-expand-head">
-                      <span class="wl-expand-title">{{ row.name }} · 价格 / 股息率走势</span>
-                      <span v-if="rangeSummary.label" class="wl-range-summary">
-                        {{ rangeSummary.label }}
-                      </span>
-                      <span
-                        v-if="exDividendsInWindow.length > 0"
-                        class="wl-ex-hint"
-                        title="除权日 TTM 滚动窗口会换入/换出某一期分红，股息率曲线当天出现台阶"
-                      >
-                        <i class="wl-ex-hint-line" :style="{ background: MARK_COLORS.exDividend }"></i>
-                        浅灰竖线 = 除权日
-                      </span>
-                      <div class="wl-window-tabs">
-                        <button
-                          v-for="preset in RANGE_PRESETS"
-                          :key="preset.key"
-                          type="button"
-                          class="wl-window-tab"
-                          :class="{ active: rangeKey === preset.key }"
-                          @click="changeRange(preset.key)"
-                        >{{ preset.label }}</button>
+                <!-- 展开行：双轴走势图，一次只展开一个 -->
+                <tr v-if="expandedId === row.id" class="wl-expand-row">
+                  <td :colspan="COLUMN_COUNT">
+                    <div class="wl-expand">
+                      <div class="wl-expand-head">
+                        <span class="wl-expand-title">{{ row.name }} · 价格 / 股息率走势</span>
+                        <span v-if="rangeSummary.label" class="wl-range-summary">
+                          {{ rangeSummary.label }}
+                        </span>
+                        <span
+                          v-if="exDividendsInWindow.length > 0"
+                          class="wl-ex-hint"
+                          title="除权日 TTM 滚动窗口会换入/换出某一期分红，股息率曲线当天出现台阶"
+                        >
+                          <i class="wl-ex-hint-line" :style="{ background: MARK_COLORS.exDividend }"></i>
+                          浅灰竖线 = 除权日
+                        </span>
+                        <div class="wl-window-tabs">
+                          <button
+                            v-for="preset in RANGE_PRESETS"
+                            :key="preset.key"
+                            type="button"
+                            class="wl-window-tab"
+                            :class="{ active: rangeKey === preset.key }"
+                            @click="changeRange(preset.key)"
+                          >{{ preset.label }}</button>
+                        </div>
                       </div>
-                    </div>
 
-                    <!-- 自定义起止区间：只在「自定义」档展开，避免常驻占位 -->
-                    <div v-if="rangeKey === 'custom'" class="wl-range-picker">
-                      <input
-                        v-model="customStart"
-                        type="date"
-                        class="wl-range-input"
-                        :min="historyRange.first_date || undefined"
-                        :max="customEnd || historyRange.last_date || undefined"
-                        aria-label="起始日期"
-                      />
-                      <span class="wl-range-sep">~</span>
-                      <input
-                        v-model="customEnd"
-                        type="date"
-                        class="wl-range-input"
-                        :min="customStart || historyRange.first_date || undefined"
-                        :max="historyRange.last_date || undefined"
-                        aria-label="结束日期"
-                      />
-                      <button
-                        type="button"
-                        class="btn btn-secondary btn-sm"
-                        :disabled="snapshotsLoading"
-                        @click="applyCustomRange"
-                      >应用</button>
-                      <span v-if="historyRange.first_date" class="wl-range-hint">
-                        可用 {{ historyRange.first_date }} ~ {{ historyRange.last_date }}
-                      </span>
-                    </div>
+                      <!-- 自定义起止区间：只在「自定义」档展开，避免常驻占位 -->
+                      <div v-if="rangeKey === 'custom'" class="wl-range-picker">
+                        <input
+                          v-model="customStart"
+                          type="date"
+                          class="wl-range-input"
+                          :min="historyRange.first_date || undefined"
+                          :max="customEnd || historyRange.last_date || undefined"
+                          aria-label="起始日期"
+                        />
+                        <span class="wl-range-sep">~</span>
+                        <input
+                          v-model="customEnd"
+                          type="date"
+                          class="wl-range-input"
+                          :min="customStart || historyRange.first_date || undefined"
+                          :max="historyRange.last_date || undefined"
+                          aria-label="结束日期"
+                        />
+                        <button
+                          type="button"
+                          class="btn btn-secondary btn-sm"
+                          :disabled="snapshotsLoading"
+                          @click="applyCustomRange"
+                        >应用</button>
+                        <span v-if="historyRange.first_date" class="wl-range-hint">
+                          可用 {{ historyRange.first_date }} ~ {{ historyRange.last_date }}
+                        </span>
+                      </div>
 
-                    <WatchlistTrendChart
-                      :snapshots="snapshots"
-                      :target-yield="row.target_yield"
-                      :ex-dividends="exDividends"
-                      :loading="snapshotsLoading"
-                    />
-                  </div>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+                      <WatchlistTrendChart
+                        :snapshots="snapshots"
+                        :target-yield="row.target_yield"
+                        :ex-dividends="exDividends"
+                        :loading="snapshotsLoading"
+                      />
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
       </div>
     </main>
 
@@ -682,48 +703,25 @@ function handleTransfer(row) {
 </script>
 
 <style scoped>
+/*
+  观察池只保留「这张表特有」的东西。
+  以下全部复用全局样式，与「投资组合」页共用同一份定义，不再各写一套：
+    .card / .card-header / .card-title / .card-actions / .btn-ghost  → 卡片骨架
+    .overview-grid / .overview-item                                  → 顶部 KPI 卡
+    .data-table                                                      → 表格字号 / 内边距 / 表头
+    .loading / .empty-state / .empty-hint                             → 加载与空态
+*/
 .wl-page {
   width: 100%;
-}
-
-.wl-toolbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.wl-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.wl-subtitle {
-  margin-top: 2px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.wl-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.wl-toolbar-actions .btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .wl-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--border-color);
-  border-top-color: var(--primary-color);
+  border: 2px solid currentColor;
+  border-top-color: transparent;
   border-radius: 50%;
+  opacity: 0.75;
   animation: wl-spin 0.8s linear infinite;
 }
 
@@ -733,69 +731,13 @@ function handleTransfer(row) {
   }
 }
 
-/* 汇总卡 */
-.wl-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.wl-summary-card {
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 14px 16px;
-}
-
-.wl-summary-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.wl-summary-value {
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
-  line-height: 1.3;
-}
-
-.wl-summary-date {
-  font-size: 17px;
-}
-
-.wl-summary-sub {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-}
-
-.wl-tone-hit {
-  color: #059669;
-}
-
-.wl-tone-near {
-  color: #b45309;
-}
-
-/* 卡片容器 */
-.wl-card {
-  background: var(--card-bg);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 4px 0;
-}
-
-/* 错误条 */
+/* 错误条：卡片内的一行提示，不做假数据兜底 */
 .wl-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
-  margin-bottom: 16px;
+  padding: 12px 14px;
   border-radius: var(--radius);
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.3);
@@ -803,94 +745,21 @@ function handleTransfer(row) {
   font-size: 14px;
 }
 
-/* 骨架 */
-.wl-skeleton-row {
-  display: flex;
-  gap: 24px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-color);
-}
+/* ---------- 表格 ---------- */
 
-.wl-skeleton-row:last-child {
-  border-bottom: none;
-}
-
-.wl-skeleton-block {
-  height: 14px;
-  flex: 1;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9);
-  background-size: 200% 100%;
-  animation: wl-shimmer 1.2s ease-in-out infinite;
-}
-
-.wl-skeleton-name {
-  flex: 2;
-}
-
-@keyframes wl-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
-  }
-}
-
-/* 空态 */
-.wl-empty {
-  padding: 56px 20px;
-  text-align: center;
-}
-
-.wl-empty-icon {
-  font-size: 34px;
-  opacity: 0.6;
-}
-
-.wl-empty-title {
-  margin-top: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.wl-empty-hint {
-  margin: 6px 0 18px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-/* 表格 */
-.wl-table-wrap {
-  overflow-x: auto;
-  padding: 0;
-}
-
+/* 12 列，窄屏时横向滚动而非挤压 */
 .wl-table {
-  width: 100%;
-  min-width: 1220px;
-  border-collapse: collapse;
-  font-size: 13px;
+  min-width: 1240px;
 }
 
+/*
+  观察池的表头不参与排序（顺序由 utils/watchlist.js 的 sortForDisplay 决定），
+  因此抹掉 .data-table 的 pointer 光标与 hover 变色，避免暗示「点表头能排序」。
+*/
 .wl-table th,
-.wl-table td {
-  padding: 11px 12px;
-  text-align: left;
-  border-bottom: 1px solid var(--border-color);
-  vertical-align: middle;
-}
-
-.wl-table th {
-  background: var(--bg-color);
-  font-weight: 600;
+.wl-table th:hover {
+  cursor: default;
   color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.wl-table tbody tr:hover {
-  background: #f8fafc;
 }
 
 .wl-num {
@@ -904,12 +773,24 @@ function handleTransfer(row) {
   box-shadow: inset 3px 0 0 #f59e0b;
 }
 
-.wl-row-open {
-  background: #f8fafc;
+/* 展开中：与资产列表 .asset-row.expanded 同一底色；
+   末尾加 :hover 是为了压过 .data-table 的悬停底色，展开态不该被悬停盖掉 */
+.wl-table tbody tr.wl-row-open,
+.wl-table tbody tr.wl-row-open:hover {
+  background: #e8f4ff;
 }
+
+/* ---------- 名称格（兼作展开走势的入口） ---------- */
 
 .wl-name-cell {
   min-width: 190px;
+  cursor: pointer;
+}
+
+/* 名称格可用键盘展开（role=button + tabindex），需要可见的焦点环 */
+.wl-name-cell:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
 }
 
 .wl-name-line {
@@ -918,9 +799,21 @@ function handleTransfer(row) {
   gap: 6px;
 }
 
+/* 折叠图标：与资产列表名称列的 ▶/▼ 同一含义（点名称展开明细） */
+.wl-expand-icon {
+  display: inline-block;
+  width: 12px;
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #94a3b8;
+}
+
 .wl-name {
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wl-code-line {
@@ -936,20 +829,39 @@ function handleTransfer(row) {
   font-variant-numeric: tabular-nums;
 }
 
+/* 类型徽标：尺寸与配色照抄资产列表的 .asset-type-badge（ETF 橙 / 其他灰） */
 .wl-type {
-  padding: 0 5px;
-  border-radius: 3px;
-  background: var(--bg-color);
-  font-size: 11px;
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
+.wl-type-etf {
+  background: #fff1e6;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.wl-type-other {
+  background: #eef2f8;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+/* 「已持有」标记：与类型徽标同尺寸的蓝色标签，两者并排时高度/圆角一致 */
 .wl-chip-held {
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   color: #1d4ed8;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
   cursor: help;
   white-space: nowrap;
 }
@@ -968,6 +880,8 @@ function handleTransfer(row) {
   font-size: 11px;
   color: #94a3b8;
 }
+
+/* ---------- 两条独立信号 ---------- */
 
 .wl-signals {
   display: flex;
@@ -1000,48 +914,16 @@ function handleTransfer(row) {
   cursor: help;
 }
 
-.wl-actions-col {
-  white-space: nowrap;
-}
+/* ---------- 展开行（走势图） ---------- */
 
-.wl-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.wl-link {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--primary-color);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.wl-link:hover {
-  text-decoration: underline;
-}
-
-.wl-link:disabled {
-  color: var(--text-secondary);
-  cursor: not-allowed;
-  text-decoration: none;
-}
-
-.wl-link-danger {
-  color: var(--danger-color);
-}
-
-/* 展开行 */
+/* 与资产列表的分红明细行同样：16px 内边距 + 浅灰底 */
 .wl-expand-row > td {
   padding: 0;
-  background: #fbfdff;
+  background: #fafafa;
 }
 
 .wl-expand {
-  padding: 12px 16px 16px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 16px;
 }
 
 .wl-expand-head {
@@ -1053,8 +935,9 @@ function handleTransfer(row) {
   margin-bottom: 8px;
 }
 
+/* 与资产列表 .dividend-header h4 同级：14px */
 .wl-expand-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
