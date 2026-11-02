@@ -56,7 +56,13 @@
 
       <!-- 每股成本 -->
       <template v-else-if="col.key === 'cost_price'">
-        <template v-if="asset.has_cost">¥{{ formatCost(asset.cost_price) }}</template>
+        <!--
+          显示只给 3 位（与券商 App 一致），真实成本可能带 6 位小数：
+          完整的「总成本 + 每股成本」放 tooltip，便于对账时确认到底按哪个成本算的盈亏。
+        -->
+        <template v-if="asset.has_cost">
+          <span :title="costTooltip">¥{{ formatCost(asset.cost_price) }}</span>
+        </template>
         <span v-else class="muted" title="未填成本，编辑资产可补充">—</span>
       </template>
 
@@ -271,10 +277,23 @@ const sourceBadge = computed(() => {
 
 
 /**
+ * 成本格的悬浮提示：券商「成本」是四舍五入后的展示值，真实成本在这里给全。
+ * 例：「每股 1.521137 · 总成本 ¥11,408.53」—— 盈亏按后者算才和券商一致。
+ */
+const costTooltip = computed(() => {
+  const per = Number(props.asset.cost_price)
+  if (!Number.isFinite(per)) return ''
+  const full = per.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+  const total = Number(props.asset.cost_value)
+  const parts = [`每股 ${full}`]
+  if (Number.isFinite(total)) parts.push(`总成本 ¥${formatAmount(total)}`)
+  return parts.join(' · ')
+})
+
+/**
  * 盈亏配色：A 股惯例是「红涨绿跌」，与欧美相反。
  * 盈利 → 红，亏损 → 绿。不要"顺手改成绿色盈利"。
- */
-const profitClass = computed(() => {
+ */const profitClass = computed(() => {
   const v = Number(props.asset.profit_amount) || 0
   if (v > 0) return 'profit-up'
   if (v < 0) return 'profit-down'

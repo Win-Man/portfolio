@@ -80,6 +80,7 @@
                 min="1"
                 placeholder="例如：1000"
                 required
+                @input="onQuantityInput"
               />
               <div v-if="errors.quantity" class="error">{{ errors.quantity }}</div>
             </div>
@@ -101,19 +102,36 @@
           <div class="form-row">
             <div class="form-group">
               <label>每股成本 (元)</label>
+              <!--
+                step=any 而不是 0.001：券商显示的 3 位成本是四舍五入后的值，
+                真实成本（总成本÷份数）常带 6 位小数。固定 3 位会让浏览器
+                直接判 stepMismatch、拦下提交，并且把盈亏算偏（513530 差 1.03 元）。
+              -->
               <input 
                 v-model.number="form.cost_price" 
                 type="number" 
-                step="0.001"
+                step="any"
                 placeholder="留空则按最新价格"
-                @input="costTouched = true"
+                @input="onCostPriceInput"
               />
               <div class="form-hint">
                 <template v-if="!costTouched">未填时默认等于最新价（盈亏为 0）</template>
-                <template v-else-if="profitPreview !== null">
-                  盈亏 {{ profitPreview >= 0 ? '+' : '' }}{{ profitPreview.toFixed(2) }}%
-                </template>
+                <template v-else-if="profitPreviewText">盈亏 {{ profitPreviewText }}</template>
                 <template v-else-if="isNegativeCost">成本 ≤ 0，仅按金额计算盈亏</template>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>持仓成本总额 (元)</label>
+              <input 
+                :value="costAmount ?? ''" 
+                type="number" 
+                step="0.01"
+                placeholder="例如：11408.53"
+                @input="onCostAmountInput"
+              />
+              <div class="form-hint">
+                按券商「市值 − 盈亏」填，可反推每股成本
               </div>
             </div>
           </div>
@@ -174,6 +192,8 @@
 import { ref, computed, watch } from 'vue'
 import { searchStocks, getStockPrice, guessAssetType } from '../api/stock.js'
 import { toast } from '../composables/useToast.js'
+import { formatAmount } from '../utils/format.js'
+import { costAmountFromPrice, costPriceFromAmount } from '../utils/cost.js'
 
 const props = defineProps({
   asset: {
@@ -265,6 +285,75 @@ const profitPreview = computed(() => {
   return ((p - c) / c) * 100
 })
 
+/** 盈亏金额预览（与券商 App 的「总盈亏」同口径：(现价 − 成本) × 份数） */
+const profitPreviewAmount = computed(() => {
+  const p = Number(form.value.price)
+  const q = Number(form.value.quantity)
+  const c = Number(form.value.cost_price)
+  if (!Number.isFinite(p) || !Number.isFinite(q) || !Number.isFinite(c)) return null
+  if (p <= 0 || q <= 0 || form.value.cost_price === null || form.value.cost_price === '') return null
+  return (p - c) * q
+})
+
+/**
+ * 盈亏提示文案：「+¥13.97（+0.12%）」。
+ * 金额放前面 —— 用户手上是券商的「总盈亏」，逐位对账看金额最快，
+ * 只给百分比（旧版）对一个 1 万元的仓位没有任何可核对性。
+ */
+const profitPreviewText = computed(() => {
+  const amount = profitPreviewAmount.value
+  if (amount === null) return ''
+  const amountText = `${amount >= 0 ? '+' : '−'}¥${formatAmount(Math.abs(amount))}`
+  const pct = profitPreview.value
+  if (pct === null) return amountText
+  return `${amountText}（${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%）`
+})
+
+// ---------- 每股成本 ↔ 持仓成本总额 联动 ----------
+/**
+ * 「谁是最后编辑的，谁就是准的」：
+ *   - 改每股成本 → 总额跟着算；
+ *   - 改总额     → 每股成本 = 总额 ÷ 份数（6 位小数）；
+ *   - 改份数     → 若最后编的是总额，则保持总额不变反推每股成本；否则重算总额。
+ * 这样券商成本只有 3 位显示时，用户可以用「市值 − 总盈亏」精确填进来。
+ */
+const costAmount = ref(null)
+const amountIsSource = ref(false)
+
+function refreshCostAmount() {
+  costAmount.value = costAmountFromPrice(form.value.cost_price, form.value.quantity)
+}
+
+function onCostPriceInput() {
+  costTouched.value = true
+  amountIsSource.value = false
+  refreshCostAmount()
+  delete errors.value.cost_price
+}
+
+function onCostAmountInput(event) {
+  const raw = event.target.value
+  if (raw === '') {
+    costAmount.value = null
+    amountIsSource.value = false
+    return
+  }
+  const amount = Number(raw)
+  if (!Number.isFinite(amount)) return
+  costAmount.value = amount
+  amountIsSource.value = true
+  costTouched.value = true
+  form.value.cost_price = costPriceFromAmount(amount, form.value.quantity)
+}
+
+function onQuantityInput() {
+  if (amountIsSource.value) {
+    form.value.cost_price = costPriceFromAmount(costAmount.value, form.value.quantity)
+  } else {
+    refreshCostAmount()
+  }
+}
+
 /** 成本为负（分红/高抛低吸后摊薄成本转负）——合法，但比例不展示 */
 const isNegativeCost = computed(() => {
   const c = Number(form.value.cost_price)
@@ -275,6 +364,7 @@ const isNegativeCost = computed(() => {
 watch(() => form.value.price, (p) => {
   if (!costTouched.value && p > 0) {
     form.value.cost_price = p
+    refreshCostAmount()
   }
 })
 
@@ -289,6 +379,9 @@ watch(() => props.asset, (newAsset) => {
     form.value = withInitialValues(emptyForm())
     costTouched.value = false
   }
+  // 成本总额是「每股成本 × 份数」的派生显示，换标的时必须重算
+  amountIsSource.value = false
+  refreshCostAmount()
   errors.value = {}
   // 重置搜索
   searchKeyword.value = ''
@@ -300,6 +393,8 @@ watch(() => props.asset, (newAsset) => {
 watch(() => props.initialValues, () => {
   if (props.asset) return
   form.value = withInitialValues(emptyForm())
+  amountIsSource.value = false
+  refreshCostAmount()
   errors.value = {}
 })
 

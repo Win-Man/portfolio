@@ -394,3 +394,42 @@ def test_summary_no_cost_at_all(client):
     assert s["total_profit"] == 0
     assert s["total_profit_percent"] is None
     assert s["costed_asset_count"] == 0
+
+
+# ---------- 高精度成本：与券商对账 ----------
+
+def test_high_precision_cost_matches_broker(client):
+    """券商成本常带 6 位以上小数，只有 3 位会把盈亏差出几块钱。
+
+    真实案例（513530，7500 份，现价 1.523）：华泰显示成本 1.521、总盈亏 +13.97；
+    而 1.521 只是券商把 1.521137… 四舍五入后的展示值。
+    按 1.521 算 → (1.523−1.521)×7500 = 15.00，比券商多 1.03 元。
+    """
+    r = client.post("/api/portfolios/1/assets", json={
+        "name": "港股通红利ETF华泰柏瑞", "code": "513530", "asset_type": "ETF",
+        "quantity": 7500, "price": 1.523, "cost_price": 1.521137,
+    })
+    assert r.status_code == 200, r.text
+    b = r.json()
+
+    assert b["cost_price"] == pytest.approx(1.521137)
+    # 总成本 = 7500 × 1.521137 = 11408.5275
+    assert b["cost_value"] == pytest.approx(11408.5275, abs=0.01)
+    # 盈亏 = 11422.50 − 11408.5275 = 13.9725 → 与券商一致的 13.97
+    assert b["profit_amount"] == pytest.approx(13.97, abs=0.01)
+    assert b["profit_percent"] == pytest.approx(0.12, abs=0.005)
+
+
+def test_cost_price_precision_is_not_truncated_by_api(client):
+    """成本值必须原样落库（6 位小数不能被四舍五入成 3 位）。"""
+    aid = client.post("/api/portfolios/1/assets", json={
+        "name": "高精度成本", "code": "600900",
+        "quantity": 3, "price": 10.0, "cost_price": 9.123456,
+    }).json()["id"]
+
+    r = client.put(f"/api/assets/{aid}", json={"cost_price": 9.654321})
+    assert r.status_code == 200, r.text
+    assert r.json()["cost_price"] == pytest.approx(9.654321)
+    # 落库后再读，精度依旧
+    assert client.get(f"/api/assets/{aid}").json()["cost_price"] == pytest.approx(9.654321)
+
