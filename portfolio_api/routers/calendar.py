@@ -115,11 +115,24 @@ def _plus_one_year(day: date) -> date:
         return day.replace(year=day.year + 1, day=28)
 
 
+def _last_year_same_month_start(end: date) -> date:
+    """「去年同月的 1 号」—— 去年同期预估的来源窗口起点。
+
+    不能用 `end - 365 天`：那会让去年 11/13 那笔在「今年 11/14」以后滚出窗口，
+    本月的预估就在**月中凭空消失**（而当月恰恰最需要它）。
+    取「去年同月 1 号」则整月稳定：只要投影月份不早于当前月，来源记录就必在窗口内。
+    """
+    first_of_month = end.replace(day=1)
+    return first_of_month.replace(year=first_of_month.year - 1)
+
+
 def _apply_estimates(drafts: List[_Draft], *, today: Optional[date] = None) -> List[_Draft]:
     """去年同期预估：把最近 12 个月内的每一笔按 +1 年投影到未来月份。
 
     规则（刻意做得简单、可解释，前端会明确标「预估」）：
-      • 只在「投影月份**严格晚于**当前年月」时生成（不覆盖过去，也不猜更远的未来年份之外的月份）
+      • 只在「投影月份**不早于**当前年月」时生成：过去的月份不猜，**当月**要猜
+        —— 当月分红本就还没到账（akshare 收录的是已发生的），显示 ¥0.00 会被
+        当成「这个月真的没有分红」，正是用户反馈「11 月显示 0」的那一类误读。
       • 同一标的若在投影月份已有真实记录（akshare / 补录），则**不生成**预估（真实优先）
       • 预估项 status 仍走 D5 的 predicted（预测），但 is_estimated=True，
         前端据此显示「预估」并且**不提供**「点击确认」（它不是一笔真实记录，无从确认）
@@ -128,7 +141,7 @@ def _apply_estimates(drafts: List[_Draft], *, today: Optional[date] = None) -> L
     做保守预估，比显示 ¥0.00 更符合用户对「预计年收入」的预期。
     """
     end = today or date.today()
-    window_start = end - timedelta(days=365)
+    window_start = _last_year_same_month_start(end)
     current_key = (end.year, end.month)
 
     # 已有真实记录覆盖到的 (标的, 年, 月)
@@ -141,8 +154,8 @@ def _apply_estimates(drafts: List[_Draft], *, today: Optional[date] = None) -> L
             continue
         projected = _plus_one_year(draft.ex_date)
         key = (projected.year, projected.month)
-        if key <= current_key:
-            continue                                   # 投影落在过去/当月 → 不预估
+        if key < current_key:
+            continue                                   # 投影落在过去的月份 → 不预估（当月要预估）
         if (draft.code, projected.year, projected.month) in real_months:
             continue                                   # 该标的该月已有真实记录
         dedup = (draft.code, projected)

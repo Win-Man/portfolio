@@ -656,3 +656,100 @@ def test_calendar_estimates_from_last_year(client, db_session, dividends):
     )
     assert r.status_code == 404
     assert r.json()["detail"] == "找不到该笔分红记录"
+
+
+# ---------- 21：当月也要预估（用户反馈「11 月显示 ¥0」） ----------
+
+def test_calendar_estimates_include_current_month(client, db_session, dividends):
+    """当月没有 akshare 记录时，用「去年同月」预估填上，而不是显示 ¥0.00。
+
+    回归：旧判据是「投影月份**严格晚于**当前年月」，当月被整月跳过 ——
+    月初打开日历，本月必然是 ¥0.00，看起来就像「算漏了一个月」。
+    但当月分红本来就没到账（akshare 只收录已发生的），¥0 是错的结论。
+    """
+    last_year_same_month = date(TODAY.year - 1, TODAY.month, 15)
+    dividends["600900"] = [_rec(last_year_same_month, 0.25)]
+    _asset(db_session, PID_EMPTY, "600900", quantity=1000)
+
+    body = _calendar(client)
+    slot = _slot(body, D_CUR)
+    assert slot["count"] == 1
+    assert slot["total_amount"] == pytest.approx(250)
+    assert slot["estimated_amount"] == pytest.approx(250)
+    assert slot["by_status"]["predicted"] == pytest.approx(250)
+
+    items = _month(client, month=D_CUR.month)["items"]
+    assert len(items) == 1
+    assert items[0]["is_estimated"] is True
+    assert items[0]["status"] == "predicted"
+    assert items[0]["ex_date"] == date(TODAY.year, TODAY.month, 15).strftime("%Y-%m-%d")
+
+    # 预估只进「年合计」，不进「已收录」，也不影响「近 12 个月已到账」
+    assert body["recorded_total"] == 0
+    assert body["estimated_total"] == pytest.approx(250)
+    assert body["total_year"] == pytest.approx(250)
+    assert body["rolling_12m_total"] == pytest.approx(250)
+    assert body["rolling_12m_count"] == 1
+
+
+def test_current_month_estimate_not_added_when_real_exists(client, db_session, dividends):
+    """当月已经有真实分红 → 不再叠加一笔「去年同期预估」（真实优先在当月同样成立）。"""
+    last_year_same_month = date(TODAY.year - 1, TODAY.month, 15)
+    dividends["600900"] = [_rec(last_year_same_month, 0.25), _rec(D_CUR, 0.5)]
+    _asset(db_session, PID_EMPTY, "600900", quantity=1000)
+
+    body = _calendar(client)
+    slot = _slot(body, D_CUR)
+    assert slot["count"] == 1                       # 只有真实那一笔
+    assert slot["estimated_amount"] == 0
+    assert slot["total_amount"] == pytest.approx(500)
+    assert slot["by_status"]["paid"] == pytest.approx(500)
+    assert body["estimated_total"] == 0
+
+
+def test_estimates_survive_mid_month():
+    """月中（今天 20 号）看本月：去年同月 13 号那笔仍要给出预估。
+
+    回归：旧实现用「今天 − 365 天」划来源窗口，本月 14 号以后，去年同月 13 号
+    的记录就滚出窗口 —— 当月的预估在月中凭空消失，正好是本功能最该生效的时候。
+    新口径取「去年同月 1 号」为窗口起点，整月稳定。
+    """
+    from routers.calendar import _Draft, _apply_estimates
+
+    def draft(day: date, per_share: float = 0.1) -> "_Draft":
+        return _Draft(
+            code="510720", name="红利ETF", asset_id=1, portfolio_id=1,
+            portfolio_name="P", asset_type="ETF", ex_date=day,
+            dividend_per_share=per_share, quantity=1000, status="paid",
+            source="etf", is_confirmed=False, is_manual=False,
+            is_mock_price=False, note="",
+        )
+
+    drafts = [draft(date(2025, 11, 13))]
+
+    for today in (date(2026, 11, 2), date(2026, 11, 14), date(2026, 11, 30)):
+        estimated = [d for d in _apply_estimates(drafts, today=today) if d.is_estimated]
+        assert len(estimated) == 1, f"{today} 时当月的预估不应消失"
+        assert estimated[0].ex_date == date(2026, 11, 13)
+        assert estimated[0].amount == pytest.approx(100)
+
+    # 过了这个月（投影月份变成过去）就不再生成：也不该往后无限外推
+    assert not [d for d in _apply_estimates(drafts, today=date(2026, 12, 1)) if d.is_estimated]
+
+
+def test_estimates_ignore_records_older_than_last_year_same_month():
+    """来源窗口起点 = 去年同月 1 号：更早的记录不再参与（否则会投影到过去月份）。"""
+    from routers.calendar import _Draft, _apply_estimates
+
+    def draft(day: date) -> "_Draft":
+        return _Draft(
+            code="600900", name="长江电力", asset_id=1, portfolio_id=1,
+            portfolio_name="P", asset_type="股票", ex_date=day,
+            dividend_per_share=0.8, quantity=1000, status="paid",
+            source="stock", is_confirmed=False, is_manual=False,
+            is_mock_price=False, note="",
+        )
+
+    # 2025-10-31 早于窗口起点 2025-11-01；投影到 2026-10-31 也早于当前月
+    drafts = [draft(date(2025, 10, 31))]
+    assert not [d for d in _apply_estimates(drafts, today=date(2026, 11, 2)) if d.is_estimated]
