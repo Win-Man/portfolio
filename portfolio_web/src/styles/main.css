@@ -130,6 +130,24 @@ body {
   font-size: 13px;
 }
 
+/* 轻量按钮：透明底 + 描边，用于卡片标题右侧的次要操作（列设置、刷新全部等） */
+.btn-ghost {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 卡片样式 */
 .card {
   background: var(--card-bg);
@@ -138,11 +156,34 @@ body {
   padding: 20px;
 }
 
+/*
+  卡片标题栏：「标题 + 右侧操作」是两个页面共用的排版骨架。
+  投资组合的「资产列表」「年收入目标」与观察池的「观察标的」都走这一套，
+  因此放在全局而不是某个组件的 scoped 样式里。
+*/
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
 .card-title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
   margin-bottom: 16px;
   color: var(--text-primary);
+}
+
+/* 标题在 card-header 里时，间距由 header 的 margin-bottom 统一给；
+   自身若再留 16px 底边距，会被 flex 的居中算进去，导致标题比按钮高一截 */
+.card-header .card-title {
+  margin-bottom: 0;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* 概览卡片网格 */
@@ -475,6 +516,12 @@ body {
 
 .empty-state p {
   margin-bottom: 16px;
+}
+
+/* 空态里的第二行说明：组合页与观察池共用 */
+.empty-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 /* 主内容布局 */

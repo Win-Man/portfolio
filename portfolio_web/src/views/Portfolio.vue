@@ -468,11 +468,3 @@ async function handleRefreshAllPrices() {
   }
 }
 </script>
-
-<style scoped>
-/* 空态里的第二行提示：引导去页头创建组合（新增组合按钮已移到 App.vue 的 header） */
-.empty-hint {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-</style>

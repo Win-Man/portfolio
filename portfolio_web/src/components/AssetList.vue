@@ -499,23 +499,8 @@ function handleRefresh(asset) {
 </script>
 
 <style scoped>
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.card-title {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.card-actions {
-  display: flex;
-  gap: 8px;
-}
-
+/* .card-header / .card-title / .card-actions / .btn-ghost 已提到 styles/main.css，
+   与观察池共用同一套卡片骨架，这里不再重复定义 */
 .btn-icon {
   display: inline-block;
   margin-right: 2px;
@@ -599,18 +584,6 @@ function handleRefresh(asset) {
   font-size: 11px;
   color: var(--text-secondary, #94a3b8);
   margin-left: 2px;
-}
-
-.btn-ghost {
-  background: transparent;
-  color: var(--text-primary, #1e293b);
-  border: 1px solid var(--border-color, #e2e8f0);
-}
-
-.btn-ghost:hover:not(:disabled) {
-  background: rgba(15, 23, 42, 0.04);
-  border-color: var(--primary-color, #2563eb);
-  color: var(--primary-color, #2563eb);
 }
 
 .btn-sm {
