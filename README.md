@@ -38,6 +38,14 @@ portfolio/
   - 顶部同时给出 `{年}年合计`（= 已收录 + 预估）、`已收录 / 预估` 拆分、以及 `近 12 个月`（与概览卡「预计年收入」同口径，两者相等），一眼看清「自然年合计」为什么和「预计年收入」不同
   - 没有任何去年同期记录可参照的未来月份，显示 ¥0.00 并标注「待收录」（不外推）
 
+- **观察池**（header 第三个 tab，`#/watchlist`）：给「还没买、但想买」的红利标的建一份**全局**候选清单（**不绑定组合**、不参与组合汇总）
+  - 每条设 **目标股息率**（必填，`0 < v ≤ 30`）与 **目标价**（选填）；后端每日收盘后自动抓「实时价 + TTM 每股分红」写当日快照，也支持「刷新全部 / 单条刷新」
+  - 列表给出：现价、TTM 每股分红、当前股息率、距目标（百分点）、**触发价**（= TTM 分红 ÷ 目标股息率）、距触发价、目标价，以及**两条互相独立**的信号（股息率线 / 价格线，**绝不合并**成单一「可买入」结论）
+  - 每行可展开 220px 双轴走势（价格右轴 ¥ + 股息率左轴 %），时间窗 30 / 90 / 180 天；**缺日如实断线**，不插值、不回填
+  - 「已持有」标记：该代码已在任意组合里时显示 chip（hover 看组合名），该行**仍保留**在列表中
+  - 「转入持仓」：跳回 `#/` 并打开既有资产表单、预填代码 / 名称 / 现价（数量自己填），仍走既有写入接口，没有第二条资产写入链路
+  - 只有**真实价**才落库：行情降级模拟价时不写快照，保留上次数据并提示「行情获取失败，已保留上次数据」
+
 > 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
 
 ## 环境要求
@@ -130,6 +138,90 @@ npm run preview  # 预览生产构建
 金额 = 持股数 × 该期每股分红；同 `(code, ex_date)` 时补录**覆盖** akshare 记录；`cost_price` 不参与本功能。
 **去年同期预估**：把最近 12 个月内的每一笔真实记录 +1 年投影到未来月份（月份严格晚于当前月、且该标的该月没有真实记录时才生成），`is_estimated=true`、状态记为 `predicted`，只计入 `total_year` / `estimated_total`，**不**计入 `rolling_12m_total`（已到账口径），也不能「点击确认」。
 
+### 观察池
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/watchlist` | 观察项列表（`created_at ASC, id ASC`）。**只读库，绝不触发外部抓取** |
+| POST | `/api/watchlist` | 新增（201）。`code` 归一化后必须是 6 位数字；同池重码 → `409 该标的已在观察池中`；**不自动抓价** |
+| PUT | `/api/watchlist/{id}` | 部分更新：字段为 `null` 则不改；`target_price=0` 表示**清空**（存 `NULL`） |
+| DELETE | `/api/watchlist/{id}` | 删除并级联删除其全部快照 → `{"message": "Watchlist item deleted"}` |
+| POST | `/api/watchlist/refresh` | 逐条抓取并 UPSERT 当天快照，返回刷新后的完整列表；单条异常吞掉继续下一条，**永不因外部数据源失败返回 5xx** |
+| POST | `/api/watchlist/{id}/refresh` | 单条刷新（同上，失败时返回上次数据 + `refresh_error`） |
+| GET | `/api/watchlist/{id}/snapshots` | 快照序列（`trade_date ASC`）。三种取法，优先级从高到低：`?all=true`（全部历史）/ `?start=&end=`（自定义闭区间，任一端可省略）/ `?days=N`（最近 N 天，默认 90、范围 1–730，越界 → 422）。`start > end` → `422 起始日期不能晚于结束日期` |
+| GET | `/api/watchlist/{id}/history-range` | 该标的**已有快照**的区间 `{ first_date, last_date, count }`（无数据时前两者为 `null`、`count=0`）。只读库，供前端给日期选择器设 min/max |
+| GET | `/api/watchlist/{id}/dividends` | **除权（派息）日** `[{ ex_date, dividend_per_share }]`（`ex_date ASC`）。取法同 `/snapshots`：`?all=true` / `?start=&end=` / `?days=N`（默认 365）。只用于走势图打竖线，**不写库**；外部失败返回 `200 []`，不报 5xx |
+
+错误约定：观察项不存在 → `404 Watchlist item not found`；`target_yield` 缺失 / ≤0 / >30、`target_price < 0`、`name` 纯空白或 >50 字、`code` 归一化后不是 6 位数字、`days` 越界 → `422`。
+
+计算口径（**只在后端算**，`watchlist_math.py` 是唯一实现；前端不做任何阈值比较）：
+
+```
+current_yield             = ttm_dividend / price * 100                 # price>0 且 ttm>0，否则 null
+yield_trigger_price       = ttm_dividend / (target_yield / 100)        # ttm<=0 -> null（显示「—」）
+yield_gap_points          = current_yield - target_yield               # 百分点差，任一 null -> null
+yield_trigger_gap_percent = (price - yield_trigger_price) / yield_trigger_price * 100   # 负数 = 现价已低于触发价
+price_gap_percent         = (price - target_price) / target_price * 100 # 未设目标价 -> null
+
+yield_signal: null -> unknown；>= 目标 -> hit；>= 目标×0.97 -> near；其余 -> watch
+price_signal: 未设目标价 -> not_set；无价格 -> unknown；<= 目标 -> hit；<= 目标×1.03 -> near；其余 -> watch
+is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快照 -> false / stale_days = null
+```
+
+- 快照表 `watchlist_snapshots` 上 `(item_id, trade_date)` **唯一**，同日重复刷新按「先查后写」UPSERT 覆盖，不会新增行（不依赖 SQLite 的 `ON CONFLICT`，便于换库）。
+- 分红抖动保护：本次抓到的 TTM 分红为 0、而该标的历史最新快照 `ttm_dividend > 0` 时**沿用历史值**，避免数据源抖动被误判成「突然不分红」。
+
+#### 历史快照回填
+
+观察池的日快照从「加入当天」才开始写，所以新加的标的展开走势只有一个点。为了让历史可见，`watchlist_history.py` 会在**每次刷新时**（定时任务或手动「刷新全部」都算）用真实数据把缺口补上 —— 默认一直补到**上市日**：
+
+| 字段 | 来源 | 口径 |
+|---|---|---|
+| `price` | 腾讯日K `web.ifzq.gtimg.cn`（不复权，个股 / ETF 同一接口） | 当日**收盘价** |
+| `ttm_dividend` | 复用 `_sum_trailing_12m`，把「今天」换成该交易日 | 该日往前滚动 12 个月的每股分红合计 |
+| `ttm_yield` | 现算 `ttm_dividend / price * 100` | 两者都 > 0 才写，否则 `null` |
+| `price_source` | 固定 `real` | — |
+
+- 范围由 `WATCHLIST_BACKFILL_FULL` 控制：`true`（默认）补到**上市日**；`false` 退回只补最近 `WATCHLIST_BACKFILL_DAYS` 天（默认 365）。`WATCHLIST_BACKFILL_ENABLED=false` 可整体关闭（**测试环境默认关闭**）。
+- **一次请求装不下全历史**：腾讯日K单次最多回 **2000 根**（3000 即 `param error`），交通银行这种 2007 年上市的标的有 4700+ 个交易日。因此走 `kline/kline`（支持 `code,day,start,end,count` 区间，`fqkline/get` 会忽略区间只回最近 N 根）从 `end` 往前**翻页**，直到翻到上市日或整页不足 2000 根（≈ 8 年/页，最多 8 页）。
+- **只补缺、不覆盖**：已存在的 `trade_date` 一律跳过 —— 当天那条实时快照（可能是 15:00 之后的价）不会被日K收盘价盖掉。
+- **不重复翻页**：进程内用 `_EARLIEST_BAR[code]` 记住「已拉到哪一天」，命中即跳过；进程重启后每个标的会重新探测一次（1–3 个日K请求，约 0.5s），之后同进程内不再请求。这是一条**性能缓存**而非数据，丢了不影响正确性。
+- **只用真实数据**：日K 拉不到就整段放弃（返回空、记 warning），绝不插值、绝不用 mock 补点；分红的 `TTM` 拉不到时价格历史照写、股息率记 `null`（`null` = 算不出，不是 0）。
+- 不走 akshare：日K 是纯 HTTP（`httpx` 已在用），不用抢 `_akshare_lock`，也没有 mini_racer 多线程崩溃风险。
+
+#### 走势时间维度
+
+展开行的走势图右上有 5 个档位：**30 天 / 90 天 / 180 天 / 全部 / 自定义**。
+
+- `30 / 90 / 180` → `GET .../snapshots?days=N`，日常看水位用；
+- `全部` → `GET .../snapshots?all=true`，上市日至今（依赖上面的全历史回填），横轴标签自动切成 `YYYY-MM`；
+- `自定义` → 两个 `<input type="date">` 选起止日期，点「应用」才发请求（改日期不会偷偷换图）。默认区间是**最近 3 年**（历史不足 3 年时给全部），日期选择器的 min/max 来自 `GET .../history-range`，选不出没数据的日子。
+- 标题右侧实时显示**当前曲线实际覆盖的范围**：`2007-05-15 ~ 2026-11-01 · 4,716 个交易日`。长区间最容易出的错觉是「图上怎么只有一条直线」，把首尾日期和点数摊开写，一眼能确认「全部」是不是真的取到了上市日。
+- 切档位有请求令牌防抖：连续点 30 → 全部 → 180，慢的那次响应不会盖住后发的请求。
+- 除权日只拉一次 `?all=true`，之后切任何区间都在前端本地裁剪，不再请求。
+
+#### 除权日竖线（解释股息率曲线的台阶）
+
+走势图上的淡灰竖线标出**除权日**，鼠标悬停当天还会多一行「除权日 · 每股派 ¥x.xxx」。
+
+为什么需要它：TTM 股息率的定义是「**该日往前滚动 12 个月**的每股分红合计 ÷ 现价」。除权日当天有一期分红进入这个窗口，一年后同一期又会滚出窗口 —— 所以股息率曲线在除权日会出现**台阶式跳变**（不是价格异常，也不是数据错误）；ETF 的月度分红则表现为每月一个小台阶。
+
+- 竖线颜色 `#cbd5e1`（`utils/watchlistColors.js` 的 `MARK_COLORS`），刻意比两条曲线更淡：它只解释数据，不参与任何判断。
+- 除权日**只从分红记录里取**，不由快照反推 —— 快照里 `ttm_dividend` 的变化既可能是「换入」也可能是「滚出」，无法区分。
+- 只在窗口内画：30 天窗口里一期除权都没有时，连「浅灰竖线 = 除权日」的提示一起隐藏。
+- 除权日那天若正好缺快照（停牌 / 回填缺日），竖线顺延到之后最近的一个有数据的交易日；早于窗口起点的除权日直接丢弃，避免在左边缘凭空多出一条线。
+- 长区间上偶尔会冒出一根很高的尖峰（交通银行 2014 / 2017 / 2019 / 2021 年都被顶到 9%~15%）：那是**相邻两期年报的除权日相隔不足 365 天**，两期同时落在「往前 365 天」这个闭区间里 —— 是 TTM 口径的边界现象，等旧一期滚出窗口（通常几天内）就自动回落，不是数据错误。尖峰正好落在除权竖线上，可以对照 tooltip 里的「除权日 · 每股派」自行验证。
+- 日K 用**不复权**价：送转股当天价格会按比例跳水（交通银行 2011 年是 10 送 1），对应日期的股息率会相应抬升。用前复权反而会把历史价按分红整体下折，算出系统性偏高的股息率，所以这里刻意选择不复权 + 当期实际分红。
+
+#### 定时快照任务
+
+- 实现：`portfolio_api/watchlist_scheduler.py`，在 `main.py` 的 `lifespan` 里 `asyncio.create_task` 启动，关闭时 `cancel()` + `await` 收尾。**零新依赖**（标准库 `asyncio` + `zoneinfo`，不引入 APScheduler / celery）。
+- 每 60 秒一个 tick，且**启动即 tick**：服务在 15:30 之后启动会立刻补抓当天缺失的快照，不用等到第二天。
+- 默认 `15:30`（Asia/Shanghai）；`WATCHLIST_SNAPSHOT_TIME=09:00` 覆盖；`WATCHLIST_SNAPSHOT_ENABLED=false` 整体关闭（**测试环境默认关闭**，不起后台任务、不发真实网络请求）。时间串解析失败时记 warning 并回退 15:30，不会启动即崩。
+- 同一 `trade_date` 最多尝试 **3 轮**，避免数据源整体挂掉时每分钟重试一整天。
+- **单 worker 限制**：`uvicorn --workers N`（N > 1）时每个进程都会跑这个循环 —— 同一天的快照靠唯一约束 + UPSERT 幂等，不会写重，但会**重复抓取**同一标的。本期不做跨进程锁，生产部署请用单 worker，或把定时抓取挪到外部调度。
+
+
 ## 数据源说明
 
 | 数据 | 来源 | 备注 |
@@ -173,12 +265,16 @@ portfolio_api/
 ├── models.py           # ORM
 ├── schemas.py          # Pydantic
 ├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记 / 分红状态与来源归类）
+├── watchlist_math.py   # ★ 观察池口径唯一实现（当前股息率 / 触发价 / 两条信号 / 陈旧判定，纯函数）
+├── watchlist_scheduler.py  # ★ 观察池每日快照定时任务（asyncio + zoneinfo，零新依赖）
+├── watchlist_history.py    # ★ 观察池历史回填（腾讯日K × 当日滚动 12 个月分红 → 历史快照）
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── routers/
 │   ├── portfolios.py   # 组合 CRUD + summary
 │   ├── assets.py       # 资产 CRUD + 刷新价格 + TTM 计算
 │   ├── goals.py        # 年收入目标 CRUD + 进度计算
 │   ├── calendar.py     # 收入日历：按派息日归月 + 确认 / 补录
+│   ├── watchlist.py    # ★ 观察池 CRUD + 每日快照 UPSERT + 走势序列
 │   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派，含分红 in-memory 缓存）
 ├── tests/
 │   ├── conftest.py
@@ -186,6 +282,7 @@ portfolio_api/
 │   ├── test_goals.py   # 年收入目标：CRUD / 校验 / 归属 / 级联 / 进度口径
 │   ├── test_calendar.py          # 收入日历：聚合 / 状态映射 / 确认幂等 / 补录 / 边界
 │   ├── test_portfolio_manage.py  # 组合新增 / 重命名 / 删除：名称校验与级联
+│   ├── test_watchlist.py         # ★ 观察池：CRUD / 校验 / 两条信号 / 快照 UPSERT / mock 不落库 / 历史回填
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
@@ -194,11 +291,12 @@ portfolio_web/
 ├── scripts/
 │   └── verify-chart-tooltip.mjs  # 用 CDP 验证饼图悬浮提示
 └── src/
-    ├── App.vue                   # 应用外壳：tab 切换 + 组合选择器 + 组合管理
-    ├── router.js                 # vue-router（hash 模式）：/ 与 /calendar
+    ├── App.vue                   # 应用外壳：三个 tab（组合 / 日历 / 观察池）+ 组合选择器 + 组合管理
+    ├── router.js                 # vue-router（hash 模式）：/、/calendar、/watchlist
     ├── views/
     │   ├── Portfolio.vue
-    │   └── CalendarView.vue      # ★ 收入日历（年/月视图 + 月 Sheet + 确认 / 补录）
+    │   ├── CalendarView.vue      # ★ 收入日历（年/月视图 + 月 Sheet + 确认 / 补录）
+    │   └── WatchlistView.vue     # ★ 观察池（工具条 + 汇总卡 + 表格 + 展开行双轴走势）
     ├── components/
     │   ├── PortfolioOverview.vue
     │   ├── PortfolioGoals.vue    # ★ 年收入目标区块（进度条 / 两条路径 / 假设收益率）
@@ -208,9 +306,11 @@ portfolio_web/
     │   ├── MonthlyStackedBarChart.vue  # ★ 月视图：来源堆叠柱 + 年度累计折线（ECharts）
     │   ├── MonthSheet.vue        # ★ 月底部 Sheet：逐笔明细
     │   ├── ManualDividendForm.vue      # ★ 补录行内表单
+    │   ├── WatchlistForm.vue     # ★ 观察标的新增 / 编辑弹窗（代码搜索复用 /api/stocks/search）
+    │   ├── WatchlistTrendChart.vue     # ★ 展开行双轴折线（echarts，异步加载）
     │   ├── AssetList.vue
     │   ├── AssetItem.vue
-    │   ├── AssetForm.vue
+    │   ├── AssetForm.vue         # 资产表单（新增了可选 props initialValues 供「转入持仓」预填）
     │   ├── GoalForm.vue          # 目标的新增 / 编辑弹窗
     │   ├── PortfolioForm.vue     # 组合的新增 / 重命名弹窗
     │   ├── Toast.vue
@@ -223,6 +323,9 @@ portfolio_web/
     │   ├── calendar.js           # 日历纯函数（分月分箱 / 状态与来源归类 / 累计折线 / 堆叠柱数据）
     │   ├── calendar.test.mjs
     │   ├── calendarColors.js     # 日历配色（8 类来源 + 状态点 + 选中格）
+    │   ├── watchlist.js          # ★ 观察池展示纯函数（信号→文案/色、排序、序列、格式化、汇总）
+    │   ├── watchlist.test.mjs
+    │   ├── watchlistColors.js    # ★ 观察池信号色与曲线色（集中管理）
     │   └── chartColors.js        # 跨图共享配色
     ├── composables/
     │   ├── useToast.js
@@ -231,6 +334,7 @@ portfolio_web/
     │   ├── portfolio.js
     │   ├── goal.js               # 目标接口（无假数据兜底，透传后端 detail）
     │   ├── calendar.js           # 日历 / 确认 / 补录接口（同上）
+    │   ├── watchlist.js          # ★ 观察池接口（无假数据兜底，透传后端 detail）
     │   └── stock.js
     └── styles/main.css
 ```
@@ -238,10 +342,12 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：157 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例 / 组合管理 6 例 / 收入日历 20 例）
+# 后端：210 个用例（API / ETF / 历年分红口径 / 成本盈亏含负成本 / 刷新缓存时效 / 年收入目标 19 例 /
+#       组合管理 6 例 / 收入日历 20 例 / 观察池 53 例）
 cd portfolio_api && uv run pytest -q
 
-# 前端：73 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示 18 例、日历纯函数 15 例）
+# 前端：93 个用例（数字格式化、饼图数据整理、TOP N 取数、悬浮提示、目标展示 18 例、
+#       日历纯函数 15 例、观察池展示纯函数 19 例）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）
