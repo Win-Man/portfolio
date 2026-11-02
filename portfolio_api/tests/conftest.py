@@ -18,6 +18,14 @@ _db_tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _db_tmpfile.close()
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_db_tmpfile.name}")
 
+# 观察池每日快照定时任务：测试期间必须关闭 —— 否则 lifespan 会起后台协程，
+# 对观察池里的标的发真实网络请求（spec 003 §6.5 / §8-12）。
+os.environ.setdefault("WATCHLIST_SNAPSHOT_ENABLED", "false")
+
+# 观察池历史回填：默认关闭 —— 否则「首次刷新」会去拉真实日K。
+# 需要验回填的用例自己 monkeypatch settings 打开（见 test_watchlist.py）。
+os.environ.setdefault("WATCHLIST_BACKFILL_ENABLED", "false")
+
 # 顶层 import（必须在设 env var 之后，但 conftest 加载在 import test module 之前）
 from config import settings  # noqa: E402
 from database import engine, SessionLocal, Base  # noqa: E402
@@ -36,9 +44,13 @@ def _reset_db():
     # 清分红缓存
     from routers.stocks import invalidate_dividend_cache
     invalidate_dividend_cache()
+    # 清日K「已补到哪一天」的进程内缓存，避免用例间互相影响
+    from watchlist_history import reset_history_cache
+    reset_history_cache()
     yield
     # 测试后清理分红缓存
     invalidate_dividend_cache()
+    reset_history_cache()
 
 
 @pytest.fixture

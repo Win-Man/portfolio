@@ -331,3 +331,96 @@ class ManualDividendResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------- 观察池（watchlist，spec 003） ----------
+# 口径：所有派生数值与两条信号只在后端算（watchlist_math.py），
+# 前端只做「信号 → 颜色/文案」映射；字段名是接口契约，不要改名、不要少。
+
+WatchlistYieldSignal = Literal["hit", "near", "watch", "unknown"]
+WatchlistPriceSignal = Literal["hit", "near", "watch", "not_set", "unknown"]
+
+
+class WatchlistCreate(BaseModel):
+    """新增观察项：目标股息率必填，目标价选填（D2）。"""
+
+    code: str
+    # 1–50 字；纯空白由路由 strip 后再判（与 GoalCreate 一致）
+    name: str = Field(min_length=1, max_length=50)
+    # None → 按 guess_asset_type(code) 推断
+    asset_type: Optional[str] = None
+    # 百分数，0 < v <= 30
+    target_yield: float = Field(gt=0, le=30)
+    # None / 0 → 未设；负数 → 422
+    target_price: Optional[float] = Field(default=None, ge=0)
+    note: Optional[str] = Field(default=None, max_length=200)
+
+
+class WatchlistUpdate(BaseModel):
+    """部分更新：None 表示不改；target_price=0 表示清空（存 NULL）。"""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    asset_type: Optional[str] = None
+    target_yield: Optional[float] = Field(default=None, gt=0, le=30)
+    target_price: Optional[float] = Field(default=None, ge=0)
+    note: Optional[str] = Field(default=None, max_length=200)
+
+
+class WatchlistItemResponse(BaseModel):
+    # ── 基本信息
+    id: int
+    code: str
+    name: str
+    asset_type: str
+    target_yield: float
+    target_price: Optional[float] = None
+    note: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+    # ── 最新快照（无快照时 price / current_yield 全为 None，ttm_dividend 为 0）
+    price: Optional[float] = None
+    ttm_dividend: float = 0
+    current_yield: Optional[float] = None
+    snapshot_date: Optional[date] = None
+    price_source: Optional[str] = None
+    is_stale: bool = False                 # snapshot_date 距今 > 5 个自然日
+    stale_days: Optional[int] = None
+
+    # ── 派生（后端算，不落库）
+    yield_trigger_price: Optional[float] = None
+    yield_gap_points: Optional[float] = None            # current_yield − target_yield
+    yield_trigger_gap_percent: Optional[float] = None   # (price − trigger) / trigger × 100
+    price_gap_percent: Optional[float] = None           # (price − target_price) / target_price × 100
+
+    # ── 两条互相独立的信号（D3：绝不合并成单一「可买入」结论）
+    yield_signal: WatchlistYieldSignal = "unknown"
+    price_signal: WatchlistPriceSignal = "not_set"
+
+    # ── 持仓关系（D11：已持有的仍保留在列表里）
+    is_held: bool = False
+    held_portfolios: List[str] = []
+
+    # ── 非持久化：本次刷新的错误说明（GET 时恒 None）
+    refresh_error: Optional[str] = None
+
+
+class WatchlistSnapshotResponse(BaseModel):
+    trade_date: date
+    price: float
+    ttm_dividend: float
+    ttm_yield: Optional[float] = None
+    price_source: str = "real"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WatchlistDividendResponse(BaseModel):
+    """一期的除权（派息）记录，用于在走势图上标出除权日竖线。
+
+    只暴露「哪天除权、每股派多少」，不暴露数据源的原始字段 ——
+    前端不需要知道 akshare / 东财的内部结构。
+    """
+
+    ex_date: date
+    dividend_per_share: float

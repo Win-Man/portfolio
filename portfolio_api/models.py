@@ -92,6 +92,67 @@ class ManualDividendRecord(Base):
     portfolio = relationship("Portfolio", back_populates="manual_dividends")
 
 
+class WatchlistItem(Base):
+    """观察池标的：全局候选清单，**不绑定任何组合**（spec 003 D1）。
+
+    - 代码入库前经 `market.normalize_code`，`sh600900` / `SH600900` 均存 `600900`；
+    - 重码校验走 API（409「该标的已在观察池中」），这里**不加**数据库级 UNIQUE(code)，
+      与 Goal 的做法一致：可读的 409 优于数据库层的 IntegrityError；
+    - 派生数值（当前股息率、触发价、两条信号）不落库，每次由 watchlist_math 现算。
+    """
+
+    __tablename__ = "watchlist_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    asset_type = Column(String, default="股票")
+    # 目标股息率（百分数，如 5.5 表示 5.5%），0 < v <= 30，由 API 校验保证
+    target_yield = Column(Float, nullable=False)
+    # 目标价（元）。NULL = 未设；PUT 传 0 表示清空
+    target_price = Column(Float, nullable=True)
+    note = Column(String, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    snapshots = relationship(
+        "WatchlistSnapshot",
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="WatchlistSnapshot.trade_date",
+    )
+
+
+class WatchlistSnapshot(Base):
+    """观察池每日快照：一个标的每个交易日最多一条。
+
+    `UniqueConstraint(item_id, trade_date)` 是 UPSERT 的判重依据 ——
+    定时任务与手动刷新都靠「先查后写」命中它，**必须保留**。
+    `price` 只来自 `source == "real"` 的行情（mock 价不落库，D7）。
+    `ttm_yield` 仅用于画曲线；列表里的「当前股息率」由 price 与 ttm_dividend 现算。
+    """
+
+    __tablename__ = "watchlist_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id", "trade_date", name="uq_watchlist_snapshot_item_date"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(
+        Integer, ForeignKey("watchlist_items.id"), nullable=False, index=True
+    )
+    trade_date = Column(Date, nullable=False)          # Asia/Shanghai 的当天
+    price = Column(Float, nullable=False)
+    ttm_dividend = Column(Float, default=0)
+    ttm_yield = Column(Float, nullable=True)           # 分红<=0 或 价格<=0 → NULL
+    price_source = Column(String, default="real")      # 当前恒为 real，字段保留
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    item = relationship("WatchlistItem", back_populates="snapshots")
+
+
 class DividendConfirmation(Base):
     """用户「点击确认」事件：(portfolio_id, code, ex_date) 唯一，保证 confirm 幂等。"""
 

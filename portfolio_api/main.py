@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,7 +11,8 @@ from sqlalchemy.orm import Session
 from config import settings
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
-from routers import portfolios, assets, stocks, goals, calendar
+from routers import portfolios, assets, stocks, goals, calendar, watchlist
+from watchlist_scheduler import run_scheduler
 
 # 配置日志：开发期人类可读，生产可改 JSON formatter
 logging.basicConfig(
@@ -68,9 +70,26 @@ run_lightweight_migrations()
 async def lifespan(app: FastAPI):
     """应用启动/关闭钩子（替代已弃用的 @app.on_event）。"""
     init_sample_data()
+
+    # 观察池每日快照：后台协程，关闭时 cancel 并 await 收尾（spec 003 §6.5）。
+    # 测试环境（conftest 设 WATCHLIST_SNAPSHOT_ENABLED=false）不启动任何后台任务。
+    scheduler_task = None
+    if settings.watchlist_snapshot_enabled:
+        scheduler_task = asyncio.create_task(run_scheduler())
+
     logger.info("portfolio_api startup complete (db=%s)", settings.database_url)
-    yield
-    logger.info("portfolio_api shutting down")
+    try:
+        yield
+    finally:
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # 收尾阶段的异常只记日志，不阻塞关闭
+                logger.exception("watchlist scheduler shutdown failed")
+        logger.info("portfolio_api shutting down")
 
 
 app = FastAPI(
@@ -94,6 +113,7 @@ app.include_router(assets.router)
 app.include_router(stocks.router)
 app.include_router(goals.router)
 app.include_router(calendar.router)
+app.include_router(watchlist.router)
 
 
 # ---------- 种子数据 ----------
