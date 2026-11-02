@@ -82,6 +82,45 @@ def _sum_trailing_12m(dividend_data: List[dict], *, today: "date | None" = None)
     return round(total, 6)
 
 
+# 资产列表展示的「历年每股分红」三列：年份 → AssetResponse 字段名。
+# ⚠ 跨年时这里要整体往前推一格，并同步改前端 AssetList 的 DEFAULT_COLUMNS。
+YEAR_DIVIDEND_FIELDS: tuple[tuple[int, str], ...] = (
+    (2026, "y2026_dividend"),
+    (2025, "y2025_dividend"),
+    (2024, "y2024_dividend"),
+)
+
+
+def year_dividend_totals(dividend_data: List[dict]) -> dict:
+    """把分红记录按**自然年**汇总成 {AssetResponse 字段名: 每股分红合计}。
+
+    纯函数：只按 EX_DIVIDEND_DATE 的年份归类，不看状态、不依赖返回顺序
+    （cninfo 升序、sina 升序，都不影响）。未命中三年的记录直接丢弃。
+    """
+    field_of = dict(YEAR_DIVIDEND_FIELDS)
+    totals = {field: 0.0 for _, field in YEAR_DIVIDEND_FIELDS}
+    for item in dividend_data or []:
+        d = _parse_dividend_date(item.get("EX_DIVIDEND_DATE"))
+        field = field_of.get(d.year) if d else None
+        if field is None:
+            continue
+        totals[field] += float(item.get("DIVIDEND_PER_SHARE") or 0)
+    # 逐笔累加会留下 0.09999999999999999 这样的浮点尾巴，落库/展示都难看
+    return {field: round(total, 6) for field, total in totals.items()}
+
+
+def with_year_dividends(response: AssetResponse, dividend_data: List[dict]) -> AssetResponse:
+    """把三年分红合计写进响应体。
+
+    **凡是返回单条 AssetResponse 且会被前端整行替换的端点都必须走这里**：
+    响应里 y20XX 字段恒有值（含真实的 0），前端 `assets[i] = updated` 才不会
+    把列表里的分红列冲成 0.00（历史 bug：点一次行内 ↻，三年分红全变 0）。
+    """
+    for field, total in year_dividend_totals(dividend_data).items():
+        setattr(response, field, total)
+    return response
+
+
 async def fetch_ttm_dividend_per_share(stock_code: str) -> float:
     """获取用于计算 TTM 股息率的每股分红金额（滚动 12 个月合计）。
 
@@ -163,28 +202,7 @@ async def get_assets(portfolio_id: int, db: Session = Depends(get_db)):
     result = []
     for asset in assets:
         data = await fetch_dividend_from_eastmoney(asset.code)
-        y2026 = 0.0
-        y2025 = 0.0
-        y2024 = 0.0
-        for item in data:
-            ex_date = item.get("EX_DIVIDEND_DATE", "")
-            if hasattr(ex_date, 'strftime'):
-                year = ex_date.strftime("%Y")
-            elif isinstance(ex_date, str) and ex_date:
-                year = ex_date[:4]
-            else:
-                year = ""
-            dividend = float(item.get("DIVIDEND_PER_SHARE") or 0)
-            if year == "2026":
-                y2026 += dividend
-            elif year == "2025":
-                y2025 += dividend
-            elif year == "2024":
-                y2024 += dividend
-        response = AssetResponse.from_orm_with_calc(asset)
-        response.y2026_dividend = y2026
-        response.y2025_dividend = y2025
-        response.y2024_dividend = y2024
+        response = with_year_dividends(AssetResponse.from_orm_with_calc(asset), data)
         result.append(response)
 
     return result
@@ -225,12 +243,12 @@ def get_asset(asset_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Asset not found")
     return AssetResponse.from_orm_with_calc(asset)
     # 注：y20xx_dividend 字段在 get_asset 中为 0 —— 该字段由列表端点 get_assets
-    # 按分红历史实时计算，单只查取 DB 默认值。如需单只查也算，可在此调
-    # fetch_dividend_from_eastmoney。鉴于列表场景才是主要消费场景，这里保持轻量。
+    # 与 refresh-price 按分红历史实时计算，这里保持轻量。
+    # ⚠ 任何「拿返回值整行替换列表行」的端点都不能是 0，见 with_year_dividends。
 
 
 @router.put("/assets/{asset_id}", response_model=AssetResponse)
-def update_asset(asset_id: int, asset: AssetUpdate, db: Session = Depends(get_db)):
+async def update_asset(asset_id: int, asset: AssetUpdate, db: Session = Depends(get_db)):
     db_asset = db.query(Asset).filter(Asset.id == asset_id).first()
     if not db_asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -243,7 +261,9 @@ def update_asset(asset_id: int, asset: AssetUpdate, db: Session = Depends(get_db
 
     db.commit()
     db.refresh(db_asset)
-    return AssetResponse.from_orm_with_calc(db_asset)
+    # 编辑保存后前端会整行替换这条数据 —— 三年分红必须带上真实值
+    data = await fetch_dividend_from_eastmoney(db_asset.code)
+    return with_year_dividends(AssetResponse.from_orm_with_calc(db_asset), data)
 
 
 @router.delete("/assets/{asset_id}")
@@ -272,6 +292,10 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
 
     # 1. 获取 TTM（滚动 12 个月）每股分红
     dividend_per_share = await fetch_ttm_dividend_per_share(db_asset.code)
+    # 同一份分红数据（上面刚拉过，这里是缓存命中）用来算三年合计。
+    # 少了这一步，响应里的 y20XX 会退化成 DB 默认 0，
+    # 前端整行替换后「26/25/24 年每股分红」立刻变成 0.00。
+    dividend_data = await fetch_dividend_from_eastmoney(db_asset.code)
 
     # 2. 获取实时价格（可能 real / mock）
     price_data = await fetch_real_time_price(db_asset.code, dividend_per_share=dividend_per_share)
@@ -288,7 +312,9 @@ async def refresh_asset_price(asset_id: int, db: Session = Depends(get_db)):
 
         db.commit()
         db.refresh(db_asset)
-        return AssetResponse.from_orm_with_calc(db_asset)
+        return with_year_dividends(
+            AssetResponse.from_orm_with_calc(db_asset), dividend_data
+        )
     else:
         raise HTTPException(status_code=400, detail=price_data.get("error", "获取价格失败"))
 

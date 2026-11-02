@@ -431,3 +431,80 @@ def test_y2026_dividend_aggregated_by_natural_year(client, monkeypatch):
     # 单只查端点不调 fetch，y2026 字段保持 0（DB 默认）
     r = client.get(f"/api/assets/{aid}")
     assert r.json()["y2026_dividend"] == 0
+
+
+# ========== 3. 单条响应里的三年分红（回归：行内刷新后变 0.00） ==========
+
+def _fake_sina_multi_year(monkeypatch):
+    """三期分红，分属 2024 / 2025 / 2026，用于校验按年归类。"""
+    import routers.stocks as stocks_mod
+
+    fake_df = pd.DataFrame({
+        "日期": ["2024-07-01", "2025-06-15", "2026-03-15"],
+        # sina 给的是「累计分红」，相邻差分后每期 = 0.02 / 0.03 / 0.05
+        "累计分红": [0.02, 0.05, 0.10],
+    })
+    monkeypatch.setattr(stocks_mod.ak, "fund_etf_dividend_sina", lambda symbol: fake_df)
+    stocks_mod.invalidate_dividend_cache()
+    return {"y2024_dividend": 0.02, "y2025_dividend": 0.03, "y2026_dividend": 0.05}
+
+
+def test_refresh_price_returns_year_dividends(client, monkeypatch, mock_tencent_ok):
+    """行内 ↻ 刷新后，响应里必须带真实三年分红。
+
+    历史 bug：refresh-price 直接返回 DB 行的 AssetResponse，y20XX 退化成 0；
+    前端用返回值整行替换（assets[i] = updated），于是「26/25/24 年每股分红」
+    在同一行内全部变成 0.00 —— 列表里看到的 0 并不是没分红。
+    """
+    expected = _fake_sina_multi_year(monkeypatch)
+
+    aid = client.post("/api/portfolios/1/assets", json={
+        "name": "红利ETF", "code": "561580", "asset_type": "ETF",
+        "quantity": 1000, "price": 1.5,
+    }).json()["id"]
+
+    body = client.post(f"/api/assets/{aid}/refresh-price").json()
+    for field, value in expected.items():
+        assert body[field] == pytest.approx(value), f"{field} 应为 {value}，实测 {body[field]}"
+
+
+def test_refresh_price_year_dividends_match_list(client, monkeypatch, mock_tencent_ok):
+    """刷新返回的三年分红与列表端点逐字段一致（同一份数据源、同一口径）。"""
+    _fake_sina_multi_year(monkeypatch)
+
+    aid = client.post("/api/portfolios/1/assets", json={
+        "name": "红利ETF", "code": "561580", "asset_type": "ETF",
+        "quantity": 1000, "price": 1.5,
+    }).json()["id"]
+
+    refreshed = client.post(f"/api/assets/{aid}/refresh-price").json()
+    listed = [a for a in client.get("/api/portfolios/1/assets").json() if a["id"] == aid][0]
+
+    for field in ("y2024_dividend", "y2025_dividend", "y2026_dividend"):
+        assert refreshed[field] == pytest.approx(listed[field])
+
+
+def test_update_asset_returns_year_dividends(client, mock_dividend):
+    """编辑保存（PUT）的返回值同样要带三年分红 —— 否则整行替换后又会归零。"""
+    aid = client.post("/api/portfolios/1/assets", json={
+        "name": "测试股", "code": "600900", "quantity": 100, "price": 10.0,
+    }).json()["id"]
+
+    body = client.put(f"/api/assets/{aid}", json={"cost_price": 9.5}).json()
+    assert body["y2025_dividend"] == pytest.approx(0.5)
+    assert body["y2024_dividend"] == pytest.approx(0.4)
+
+
+def test_year_dividend_totals_ignores_undated_records():
+    """无日期/年份不在三年窗口内的记录不参与汇总（纯函数）。"""
+    from routers.assets import year_dividend_totals
+
+    totals = year_dividend_totals([
+        {"EX_DIVIDEND_DATE": "2026-01-05", "DIVIDEND_PER_SHARE": 0.1},
+        {"EX_DIVIDEND_DATE": date(2026, 7, 5), "DIVIDEND_PER_SHARE": 0.2},
+        {"EX_DIVIDEND_DATE": "", "DIVIDEND_PER_SHARE": 9.9},
+        {"EX_DIVIDEND_DATE": "2023-07-05", "DIVIDEND_PER_SHARE": 9.9},
+        {"EX_DIVIDEND_DATE": "2030-07-05", "DIVIDEND_PER_SHARE": 9.9},
+        {"EX_DIVIDEND_DATE": "2025-08-05", "DIVIDEND_PER_SHARE": 0.3},
+    ])
+    assert totals == {"y2026_dividend": 0.3, "y2025_dividend": 0.3, "y2024_dividend": 0}

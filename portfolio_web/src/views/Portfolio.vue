@@ -434,10 +434,11 @@ async function handleDelete(assetId) {
 async function handleRefreshPrice(asset, done) {
   try {
     const updatedAsset = await refreshAssetPrice(asset)
-    // 更新本地数据
+    // 合并而不是整行替换：刷新接口只负责价格/分红相关字段，
+    // 用返回值直接顶掉整行会让它没返回的派生字段（如 y20XX_dividend）变成 undefined/0。
     const index = assets.value.findIndex(a => a.id === asset.id)
     if (index !== -1) {
-      assets.value[index] = updatedAsset
+      assets.value[index] = { ...asset, ...updatedAsset }
     }
     // 重新计算汇总
     await loadSummary()
