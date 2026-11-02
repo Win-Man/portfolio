@@ -12,9 +12,15 @@
           class="app-tab"
           :class="{ active: isCalendarTab }"
         >收入日历</router-link>
+        <router-link
+          to="/watchlist"
+          class="app-tab"
+          :class="{ active: isWatchlistTab }"
+        >观察池</router-link>
       </nav>
 
-      <div class="header-actions">
+      <!-- 观察池是全局清单，不绑定组合：该 tab 下隐藏组合选择器与组合增删改按钮（D1） -->
+      <div v-if="!isWatchlistTab" class="header-actions">
         <div class="portfolio-selector">
           <label>选择组合：</label>
           <select
@@ -105,6 +111,7 @@ const {
 const route = useRoute()
 const isPortfolioTab = computed(() => route.name === 'portfolio')
 const isCalendarTab = computed(() => route.name === 'calendar')
+const isWatchlistTab = computed(() => route.name === 'watchlist')
 
 const toastRef = ref(null)
 

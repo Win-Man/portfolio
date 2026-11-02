@@ -43,6 +43,7 @@
     <AssetForm 
       v-if="showModal"
       :asset="editingAsset"
+      :initial-values="assetInitialValues"
       :submitting="submitting"
       @close="closeModal"
       @submit="handleSubmit"
@@ -59,7 +60,8 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, defineAsyncComponent } from 'vue'
+import { ref, watch, nextTick, defineAsyncComponent, onActivated } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PortfolioOverview from '../components/PortfolioOverview.vue'
 import AssetList from '../components/AssetList.vue'
 import AssetForm from '../components/AssetForm.vue'
@@ -97,7 +99,8 @@ const PortfolioCharts = defineAsyncComponent(
 
 // 组合列表 / 选中组合 / 组合管理（新增、重命名、删除）都在 App.vue + usePortfolioContext 里，
 // 本视图只消费选中组合，并 watch 它重新加载自己的数据。
-const { portfolios, selectedPortfolioId, loadingPortfolios } = usePortfolioContext()
+const { portfolios, selectedPortfolioId, loadingPortfolios, selectPortfolio, ensurePortfoliosLoaded } =
+  usePortfolioContext()
 
 const summary = ref({
   total_market_value: 0,
@@ -127,6 +130,63 @@ const assumedYieldOverride = ref(null)
 const showGoalModal = ref(false)
 const editingGoal = ref(null)
 const goalSubmitting = ref(false)
+
+// ---------- 观察池「转入持仓」：query 预填既有 AssetForm（spec 003 D12） ----------
+// 只传 code / name / price，数量与成本留空，仍由既有 POST /api/portfolios/{pid}/assets 写入。
+const assetInitialValues = ref(null)
+let lastPrefillKey = ''
+const route = useRoute()
+const router = useRouter()
+
+/**
+ * 处理 `?addCode=&addName=&addPrice=`。
+ *
+ * 本视图在 `<keep-alive>` 里，`onMounted` 只跑一次，因此用
+ * `watch(() => route.query, { immediate: true })` + `onActivated` 双保险：
+ * 同一次跳转会命中两处，靠 `lastPrefillKey` 去重，只弹一次表单。
+ */
+async function maybePrefillAssetForm() {
+  const query = route.query || {}
+  if (!query.addCode) {
+    lastPrefillKey = ''
+    return
+  }
+
+  const code = String(query.addCode)
+  const key = `${code}|${query.addName ?? ''}|${query.addPrice ?? ''}`
+  if (key === lastPrefillKey) return
+  lastPrefillKey = key
+
+  // 组合列表可能还没拉过（直接打开 #/?addCode=... 时），先确保加载完成
+  if (portfolios.value.length === 0) {
+    await ensurePortfoliosLoaded()
+  }
+  if (portfolios.value.length === 0) {
+    toast.warning('请先新建一个组合')
+    router.replace({ path: '/' })
+    return
+  }
+
+  // 确保有选中的组合（为空则落到第一个）
+  if (selectedPortfolioId.value === null || selectedPortfolioId.value === undefined) {
+    selectPortfolio(portfolios.value[0].id)
+  }
+
+  const price = Number(query.addPrice)
+  assetInitialValues.value = {
+    code,
+    name: query.addName ? String(query.addName) : '',
+    price: Number.isFinite(price) && price > 0 ? price : null,
+  }
+  editingAsset.value = null
+  showModal.value = true
+
+  // 打开后立刻清掉 query：刷新页面不会重复弹窗
+  router.replace({ path: '/' })
+}
+
+watch(() => route.query, maybePrefillAssetForm, { immediate: true })
+onActivated(maybePrefillAssetForm)
 
 // 并发保护：快速连打假设收益率时，只有最后一次请求的结果会写回
 let progressRequestSeq = 0
@@ -320,17 +380,21 @@ async function handleGoalRemove(goal) {
 
 function openAddModal() {
   editingAsset.value = null
+  // 手动新增不继承上一次「转入持仓」的预填值
+  assetInitialValues.value = null
   showModal.value = true
 }
 
 function openEditModal(asset) {
   editingAsset.value = { ...asset }
+  assetInitialValues.value = null
   showModal.value = true
 }
 
 function closeModal() {
   showModal.value = false
   editingAsset.value = null
+  assetInitialValues.value = null
 }
 
 async function handleSubmit(data) {

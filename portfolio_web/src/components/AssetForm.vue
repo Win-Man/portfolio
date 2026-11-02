@@ -183,6 +183,13 @@ const props = defineProps({
   submitting: {
     type: Boolean,
     default: false
+  },
+  // 可选：新增时的预填值（spec 003 D12「转入持仓」用）。
+  // 只填 code / name / price / asset_type，数量与成本留空待用户填写；
+  // 不传时行为与原来完全一致（编辑模式忽略它）。
+  initialValues: {
+    type: Object,
+    default: null
   }
 })
 
@@ -208,6 +215,38 @@ const form = ref({
   ttm_yield: null,
   note: ''
 })
+
+/** 空白表单（新增时的初始值） */
+function emptyForm() {
+  return {
+    name: '',
+    code: '',
+    asset_type: '股票',
+    quantity: null,
+    price: null,
+    cost_price: null,
+    dividend_per_share: null,
+    ttm_yield: null,
+    note: ''
+  }
+}
+
+/**
+ * 只把「预填白名单」里的字段合并进空白表单：
+ * 数量 / 成本 / 分红一律留空（转入持仓时这些是用户要自己决定的值）。
+ */
+function withInitialValues(base) {
+  const source = props.initialValues
+  if (!source) return base
+  const next = { ...base }
+  if (source.code) next.code = String(source.code)
+  if (source.name) next.name = String(source.name)
+  if (source.asset_type) next.asset_type = source.asset_type
+  else if (source.code) next.asset_type = guessAssetType(source.code)
+  const price = Number(source.price)
+  if (Number.isFinite(price) && price > 0) next.price = price
+  return next
+}
 
 const errors = ref({})
 
@@ -246,17 +285,8 @@ watch(() => props.asset, (newAsset) => {
     // 编辑时成本来自库里的真实值，不应被价格覆盖
     costTouched.value = true
   } else {
-    form.value = {
-      name: '',
-      code: '',
-      asset_type: '股票',
-      quantity: null,
-      price: null,
-      cost_price: null,
-      dividend_per_share: null,
-      ttm_yield: null,
-      note: ''
-    }
+    // 新增：空白表单，可带「转入持仓」的预填值（不传时与原来完全一致）
+    form.value = withInitialValues(emptyForm())
     costTouched.value = false
   }
   errors.value = {}
@@ -265,6 +295,13 @@ watch(() => props.asset, (newAsset) => {
   searchResults.value = []
   searched.value = false
 }, { immediate: true })
+
+// 同一个实例被复用且换了预填值时（例如连续两次「转入持仓」），同步刷新表单
+watch(() => props.initialValues, () => {
+  if (props.asset) return
+  form.value = withInitialValues(emptyForm())
+  errors.value = {}
+})
 
 // 资产类型跟随代码自动识别：手动输入 561580 也会变成 ETF
 watch(() => form.value.code, (code) => {
