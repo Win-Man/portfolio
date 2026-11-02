@@ -248,10 +248,27 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 
 | 数据 | 来源 | 备注 |
 |---|---|---|
-| 标的代码表（搜索用） | akshare | 个股 `stock_info_a_code_name` + ETF/LOF/封基 `fund_etf_category_sina`，合并缓存到 `stock_cache.json`（约 7 700 条） |
+| 标的代码表（搜索用） | akshare | 个股 `stock_info_a_code_name`（失败自动换 `stock_zh_a_spot_em`）+ ETF/LOF/封基 `fund_etf_category_sina`，合并缓存到 `stock_cache.json`（约 7 700 条） |
 | 实时价格 | 腾讯行情 `qt.gtimg.cn` | 失败时返回模拟价格并标记 `source=mock` |
 | 个股历史分红 | akshare `stock_dividend_cninfo` | 字段名按 akshare 当前版本硬编码 |
 | ETF 历史分红 | akshare `fund_etf_dividend_sina` | 返回**累计分红**，代码内做相邻差分还原每期金额 |
+
+### 搜索口径（名称归一化 + 缓存兜底）
+
+数据源给的名称**不能直接拿来做包含匹配**：沪深两市有 36 只 3~4 字老股票用空格补齐
+（`000858` → `五 粮 液`、`000002` → `万  科Ａ`），全角字母也常见。直接匹配的话
+搜「五粮液」「万科A」都是 0 条 —— 收在 `routers/stocks.py` 的 `normalize_name()`：
+
+- 去掉所有空格（含全角 `\u3000`）、全角 ASCII 转半角（`Ａ` → `A`）；
+- 缓存表存 `name`（归一化后的展示名）+ `name_key`（大写搜索键），搜索时**关键词也归一化**；
+- 结果里代码精确命中的排最前，展示的名称同样是归一化后的（`五粮液` 而不是 `五 粮 液`）。
+
+两个兜底，避免「缓存坏了就搜不到任何股票」：
+
+- 个股来源两个（`stock_info_a_code_name` 要抓 18 页、偶发失败 → 退到 `stock_zh_a_spot_em` 单请求）；
+  都失败时**沿用上一次缓存里的个股行**，绝不把「只剩基金」的残缺结果写回文件；
+- 缓存标记为不完整后 600s 自动重试（`GET /api/stocks/search/cache-info` 的 `complete` 可查）；
+- 关键词是 6 位数字且列表里没有 → 直接问腾讯行情拿名称，**按代码添加永远不会失败**。
 
 `source` 字段约定（参见 `schemas.AssetResponse`）：
 
@@ -320,7 +337,7 @@ rm portfolio_api/portfolio.db portfolio_api/stock_cache.json
 |---|---|---|
 | `ModuleNotFoundError: akshare` | manifest 漏装 | `uv add akshare` |
 | 后端首次调 `/assets` 很慢 | akshare 拉分红数据 | 正常现象，后续走缓存 |
-| 股票搜索返回空 | akshare 首次拉全量代码表失败 | 看后端日志，重启后端会重试 |
+| 某只股票搜不到（如 `000858`） | ① 名称带排版空格（数据源给的是「五 粮 液」）；② 标的列表缓存只剩基金 | ① 已在 `normalize_name` 里归一化，不会再出现；② `GET /api/stocks/search/cache-info` 看 `complete`，`false` 表示个股来源失败，600s 后自动重试，也可 `POST /api/stocks/search/refresh` |
 | `npm run dev` 报 `vite: command not found` | node_modules 是错平台二进制 | `rm -rf node_modules package-lock.json && npm install` |
 | 前端调后端 CORS 报错 | 没用 vite proxy | 检查 `vite.config.js` 中 `server.proxy['/api']` 是否存在 |
 
@@ -411,8 +428,9 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：220 个用例（API / ETF / 历年分红口径（含刷新响应回归）/ 成本盈亏含负成本与高精度成本 /
-#       刷新缓存时效 / 年收入目标 19 例 / 组合管理 6 例 / 收入日历 24 例 / 观察池 53 例）
+# 后端：234 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ ETF /
+#       历年分红口径（含刷新响应回归）/ 成本盈亏含负成本与高精度成本 / 刷新缓存时效 /
+#       年收入目标 19 例 / 组合管理 6 例 / 收入日历 24 例 / 观察池 53 例）
 cd portfolio_api && uv run pytest -q
 
 # 前端：107 个用例（数字格式化 / 价格精度、成本↔总额换算、饼图数据整理、TOP N 取数、悬浮提示、

@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 from config import settings
 from market import (
+    guess_asset_type,
     is_etf,
     market_code as build_market_code,
     market_label,
@@ -59,6 +60,32 @@ def invalidate_dividend_cache(stock_code: str | None = None) -> None:
 
 # ========== 工具函数 ==========
 
+# 名称里的排版空格：沪深交易所对 3~4 字的短名用空格补齐（'五 粮 液'、'万  科Ａ'），
+# 全角空格 \u3000 也会出现。归一化后用户搜「五粮液」才搜得到。
+_NAME_WS_RE = re.compile(r"[\s\u3000]+")
+
+
+def normalize_name(text) -> str:
+    """标的名称归一化：去掉排版空格 + 全角 ASCII 转半角。
+
+    '五 粮 液' → '五粮液'；'万  科Ａ' → '万科A'（Ａ 是 U+FF21）。
+    只转换 0xFF01~0xFF5E（全角 ASCII），不碰中文与其它符号。
+    """
+    if text is None:
+        return ""
+    s = _NAME_WS_RE.sub("", str(text))
+    s = "".join(
+        chr(ord(ch) - 0xFEE0) if 0xFF01 <= ord(ch) <= 0xFF5E else ch
+        for ch in s
+    )
+    return s.strip()
+
+
+def name_key(text) -> str:
+    """搜索键：归一化名称 + 统一大写（'万科A' / '万科ａ' 都能命中）。"""
+    return normalize_name(text).upper()
+
+
 def get_market_code(stock_code: str) -> str:
     """根据代码返回带市场前缀的行情代码（如 sh561580）。
 
@@ -80,7 +107,9 @@ async def fetch_price_from_tencent(stock_code: str) -> dict:
         if match:
             parts = match.group(1).split('~')
             if len(parts) > 30:
-                name = parts[1]
+                # 行情接口的名字同样带排版空格（'五 粮 液'），统一归一化后再往外给，
+                # 免得资产/观察项的名称被写成「五 粮 液」
+                name = normalize_name(parts[1])
                 price = float(parts[3])
                 yesterday_close = float(parts[4])
                 
@@ -378,37 +407,81 @@ import json
 STOCK_CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "stock_cache.json")
 STOCK_CACHE_FILE = os.path.abspath(STOCK_CACHE_FILE)
 
+# 缓存不完整（个股来源挂掉）时的重试间隔：不把残缺结果当成「今天已刷新」，
+# 否则 A 股列表失败一次，一整天都只能搜到基金（用户报过：搜不到 000858）。
+STOCK_CACHE_RETRY_SECONDS = 600
+
 # 模块级缓存
 _stock_cache = None
 _cache_time = 0
 _cache_date = ""  # 存储缓存的日期
+_cache_complete = True   # 个股 + 基金都拿到了才算完整
+_next_refresh_retry = 0.0
+
 
 def _get_today_date():
     from datetime import date
     return date.today().isoformat()
 
+
+def _finalize_frame(df):
+    """补全/规整缓存表的列，任何入口（文件 / 刷新）都必须过这一层。
+
+    产出列：code（6 位纯代码）/ name（去空格显示名）/ name_key（搜索键）
+            / asset_type / market
+    """
+    df = df.copy()
+    df['code'] = df['code'].map(normalize_code)
+    df['name'] = df['name'].map(normalize_name)
+    df['name_key'] = df['name'].str.upper()
+    if 'asset_type' not in df.columns:
+        df['asset_type'] = df['code'].map(lambda c: 'ETF' if is_etf(c) else '股票')
+    df['market'] = df['code'].map(market_label)
+    return df
+
+
+def _has_stock_rows(df) -> bool:
+    """缓存里是否有个股（只有基金的缓存是残缺的，不能算「刷新成功」）。"""
+    if df is None or getattr(df, 'empty', True):
+        return False
+    if 'asset_type' not in df.columns:
+        return True
+    return bool((df['asset_type'] == '股票').any())
+
+
+def _read_cache_payload():
+    """只读缓存文件（不改变模块状态）；失败返回 None。"""
+    if not os.path.exists(STOCK_CACHE_FILE):
+        return None
+    try:
+        with open(STOCK_CACHE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("读取缓存文件失败: %s", e)
+        return None
+
+
 def _load_cache_from_file():
     """从本地文件加载缓存（兼容旧格式：旧文件只有 code/name 两列）"""
-    global _stock_cache, _cache_time, _cache_date
-    if os.path.exists(STOCK_CACHE_FILE):
-        try:
-            with open(STOCK_CACHE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                df = pd.DataFrame(data['stocks'])
-                # 旧缓存没有 asset_type / market 列，按代码补齐
-                if 'asset_type' not in df.columns:
-                    df['asset_type'] = df['code'].map(
-                        lambda c: 'ETF' if is_etf(c) else '股票'
-                    )
-                if 'market' not in df.columns:
-                    df['market'] = df['code'].map(market_label)
-                _stock_cache = df
-                _cache_time = data.get('cache_time', 0)
-                _cache_date = data.get('cache_date', '')
-                logger.info("从本地文件加载标的缓存: %d 条, 日期: %s", len(_stock_cache), _cache_date)
-                return True
-        except Exception as e:
-            logger.warning("加载缓存失败: %s", e)
+    global _stock_cache, _cache_time, _cache_date, _cache_complete
+    data = _read_cache_payload()
+    if data is None:
+        return False
+    try:
+        df = _finalize_frame(pd.DataFrame(data['stocks']))
+        _stock_cache = df
+        _cache_time = data.get('cache_time', 0)
+        _cache_date = data.get('cache_date', '')
+        _cache_complete = _has_stock_rows(df)
+        logger.info("从本地文件加载标的缓存: %d 条, 日期: %s", len(_stock_cache), _cache_date)
+        if not _cache_complete:
+            logger.error(
+                "标的缓存里没有任何个股（只有基金），标记为不完整，下次访问会重新拉取"
+            )
+        return True
+    except Exception as e:
+        logger.warning("加载缓存失败: %s", e)
+        return False
 
 def _save_cache_to_file():
     """保存缓存到本地文件"""
@@ -425,32 +498,100 @@ def _save_cache_to_file():
     except Exception as e:
         logger.warning("保存缓存失败: %s", e)
 
+def _fetch_stock_rows():
+    """全量 A 股（code / name）。失败返回 None。
+
+    两个来源互为备份：`stock_info_a_code_name()` 要抓 18 个分页、偶发失败；
+    `stock_zh_a_spot_em()` 一次请求拿全市场（还包含北交所），但它依赖东财
+    push2 域名，网络受限时同样会挂。两个都挂就返回 None 交给上层兜底。
+    """
+    sources = (
+        ("stock_info_a_code_name", lambda: ak.stock_info_a_code_name()[['code', 'name']]),
+        ("stock_zh_a_spot_em", lambda: (
+            ak.stock_zh_a_spot_em()
+            .rename(columns={'代码': 'code', '名称': 'name'})[['code', 'name']]
+        )),
+    )
+    for source, loader in sources:
+        try:
+            df = loader()
+        except Exception as e:
+            logger.warning("个股列表来源 %s 失败: %s", source, e)
+            continue
+        if df is None or df.empty:
+            logger.warning("个股列表来源 %s 返回空", source)
+            continue
+        df = df.dropna(subset=['code', 'name']).copy()
+        if df.empty:
+            logger.warning("个股列表来源 %s 清洗后为空", source)
+            continue
+        logger.info("个股: %d 条（来源 %s）", len(df), source)
+        return df
+    return None
+
+
+def _carry_over_stock_rows():
+    """上一次缓存里的个股行（优先内存，其次文件）。
+
+    个股来源临时失败时用它兜底 —— 绝不能把「只剩基金」的残缺结果
+    当成全量缓存写回文件（用户报过的现象：搜 000858 什么都搜不到）。
+    """
+    candidates = []
+    if _stock_cache is not None and not _stock_cache.empty:
+        candidates.append(_stock_cache)
+    else:
+        payload = _read_cache_payload()
+        if payload:
+            try:
+                candidates.append(pd.DataFrame(payload.get('stocks') or []))
+            except Exception as e:  # pragma: no cover - 文件结构异常
+                logger.warning("缓存文件内容无法解析为标的表: %s", e)
+
+    for df in candidates:
+        if df is None or df.empty:
+            continue
+        if 'asset_type' in df.columns:
+            rows = df[df['asset_type'] == '股票']
+        else:  # 旧格式：没有 asset_type 列，按代码推断
+            rows = df[~df['code'].map(is_etf)]
+        if not rows.empty:
+            return rows[['code', 'name']].copy()
+    return None
+
+
 def _refresh_stock_cache():
     """从 akshare 刷新可搜索标的缓存：A 股个股 + ETF/LOF/封闭式基金。
 
     合并来源：
-      - ak.stock_info_a_code_name()           → 个股（0/3/6/9 开头，约 5500 只）
+      - 个股：stock_info_a_code_name / stock_zh_a_spot_em（互为备份）
       - ak.fund_etf_category_sina('ETF基金')   → ETF（5/1 开头，约 1700 只）
       - ak.fund_etf_category_sina('LOF基金')   → LOF
       - ak.fund_etf_category_sina('封闭式基金') → 封闭式
 
-    任一来来源失败不影响其它来源（graceful degradation）。
+    任一来来源失败不影响其它来源（graceful degradation），但**个股失败时
+    沿用上次的个股行**，并把缓存标记为不完整（退避后重试）—— 否则一次
+    网络抖动就会让「搜股票」整整一天不可用。
     """
-    global _stock_cache, _cache_time, _cache_date
+    global _stock_cache, _cache_time, _cache_date, _cache_complete, _next_refresh_retry
 
     frames = []
 
     # 1. 个股
     logger.info("正在从 akshare 获取全量A股数据...")
-    try:
-        df_stock = ak.stock_info_a_code_name()
-        if df_stock is not None and not df_stock.empty:
-            df_stock = df_stock[['code', 'name']].copy()
-            df_stock['asset_type'] = '股票'
-            frames.append(df_stock)
-            logger.info("个股: %d 条", len(df_stock))
-    except Exception as e:
-        logger.warning("获取个股列表失败: %s", e)
+    df_stock = _fetch_stock_rows()
+    stock_ok = df_stock is not None and not df_stock.empty
+    if stock_ok:
+        df_stock = df_stock.copy()
+        df_stock['asset_type'] = '股票'
+        frames.append(df_stock)
+    else:
+        carried = _carry_over_stock_rows()
+        if carried is not None:
+            carried['asset_type'] = '股票'
+            frames.append(carried)
+            logger.error(
+                "个股来源不可用，沿用上次缓存的 %d 只个股", len(carried)
+            )
 
     # 2. 基金（ETF / LOF / 封闭式）
     for kind in ("ETF基金", "LOF基金", "封闭式基金"):
@@ -470,87 +611,142 @@ def _refresh_stock_cache():
 
     if not frames:
         logger.warning("刷新标的缓存失败：所有来源都不可用")
+        _cache_complete = False
+        _next_refresh_retry = time.time() + STOCK_CACHE_RETRY_SECONDS
         return False
 
     merged = pd.concat(frames, ignore_index=True)
     # 同一代码可能同时出现在多个来源（如 ETF 也在 LOF 列表），去重保留首次出现
     merged = merged.drop_duplicates(subset=['code'], keep='first')
-    merged['market'] = merged['code'].map(market_label)
 
-    _stock_cache = merged.reset_index(drop=True)
+    _stock_cache = _finalize_frame(merged).reset_index(drop=True)
     _cache_time = time.time()
     _cache_date = _get_today_date()
+    _cache_complete = stock_ok
+    if stock_ok:
+        _next_refresh_retry = 0.0
+    else:
+        _next_refresh_retry = time.time() + STOCK_CACHE_RETRY_SECONDS
+        logger.error(
+            "标的缓存不完整（个股列表拉取失败）：%d 条，%d 秒后重试",
+            len(_stock_cache), STOCK_CACHE_RETRY_SECONDS,
+        )
 
     _save_cache_to_file()
     logger.info("标的缓存刷新完成: 共 %d 条", len(_stock_cache))
     return True
 
+
 def get_stock_cache():
-    """获取标的缓存（懒加载机制）"""
-    global _stock_cache, _cache_time, _cache_date
+    """获取标的缓存（懒加载 + 不完整时退避重试）"""
     today = _get_today_date()
 
-    # 如果缓存为空或日期不是今天，先尝试从文件加载
     if _stock_cache is None:
-        if not _load_cache_from_file():
-            # 文件也没有，刷新缓存
-            _refresh_stock_cache()
-    elif _cache_date != today:
-        # 日期变了，刷新缓存
-        logger.info("缓存日期(%s)不是今天(%s)，刷新缓存...", _cache_date, today)
+        _load_cache_from_file()
+
+    need_refresh = (
+        _stock_cache is None
+        or _cache_date != today
+        or not _cache_complete
+    )
+    if need_refresh and time.time() >= _next_refresh_retry:
+        if _stock_cache is not None and _cache_date != today:
+            logger.info("缓存日期(%s)不是今天(%s)，刷新缓存...", _cache_date, today)
         _refresh_stock_cache()
-    
+
     return _stock_cache
+
+
+async def _lookup_by_quote(code: str):
+    """6 位代码 → 单条搜索结果（直接问实时行情，绕过标的列表缓存）。
+
+    列表缓存残缺 / 停牌新股不在列表里时，按代码依然能加上：
+    腾讯 `qt.gtimg.cn` 只要能取到价格，就一定带名称。
+    """
+    code = normalize_code(code)
+    if not code or not re.fullmatch(r"\d{6}", code):
+        return None
+    data = await fetch_price_from_tencent(code)
+    if not data.get("success"):
+        return None
+    return {
+        "code": code,
+        "name": normalize_name(data.get("name")) or code,
+        "market": market_label(code),
+        "type": guess_asset_type(code),
+    }
 
 
 @router.get("/search")
 async def search_stocks(keyword: str):
-    """搜索标的（代码或名称），覆盖个股 + ETF/LOF/封闭式基金"""
-    if not keyword or len(keyword.strip()) < 1:
+    """搜索标的（代码或名称），覆盖个股 + ETF/LOF/封闭式基金。
+
+    匹配前两边都做归一化，用户不必迁就数据源的空格/全角写法：
+      • 代码：包含匹配（'0858' 也能命中 000858）
+      • 名称：归一化后包含匹配（'五粮液' 命中数据里的 '五 粮 液'，
+        '万科A' 命中 '万  科Ａ'）—— 沪深两市有 36 只短名股票带排版空格
+    结果为空且关键词是 6 位数字时，回落实时行情接口解析名称，
+    这样即使标的列表缓存残缺，按代码添加也不会失败。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
         return []
-    
+
     try:
-        # 使用缓存获取数据
         df = get_stock_cache()
-        if df is None or df.empty:
-            return []
-        
-        # 本地搜索（模糊匹配代码或名称）
-        kw = keyword.strip()
-        kw_upper = kw.upper()
-        mask = (
-            df['code'].str.contains(kw_upper, na=False) |
-            df['name'].str.contains(kw, na=False)
-        )
-        results = df[mask].head(20)
-        
-        # 返回格式
-        stock_list = []
-        for _, row in results.iterrows():
-            code = row['code']
-            asset_type = row.get('asset_type') or ('ETF' if is_etf(code) else '股票')
-            stock_list.append({
-                "code": code,
-                "name": row['name'],
-                "market": row.get('market') or market_label(code),
-                "type": asset_type,
-            })
-        
-        return stock_list
-        
+        if df is not None and not df.empty:
+            if 'name_key' not in df.columns:      # 旧对象兜底
+                df = _finalize_frame(df)
+
+            kw_key = name_key(kw)
+            mask = (
+                df['code'].str.contains(kw.upper(), na=False, regex=False) |
+                df['name_key'].str.contains(kw_key, na=False, regex=False)
+            )
+            results = df[mask]
+            if not results.empty:
+                # 代码精确命中的排最前，搜 '000858' 时不用翻找
+                results = (
+                    results.assign(
+                        _exact=(results['code'] == normalize_code(kw)).astype(int)
+                    )
+                    .sort_values('_exact', ascending=False, kind='stable')
+                    .drop(columns='_exact')
+                    .head(20)
+                )
+                return [
+                    {
+                        "code": row['code'],
+                        "name": row['name'],
+                        "market": row.get('market') or market_label(row['code']),
+                        "type": row.get('asset_type') or guess_asset_type(row['code']),
+                    }
+                    for _, row in results.iterrows()
+                ]
     except Exception as e:
         logger.warning("标的搜索失败: %s", e)
-        return []
+
+    # 列表里没有 → 6 位代码直接问行情
+    single = await _lookup_by_quote(kw)
+    return [single] if single else []
 
 
 @router.post("/search/refresh")
 async def refresh_stock_cache():
-    """手动触发刷新股票缓存"""
+    """手动触发刷新股票缓存。
+
+    个股来源挂掉但基金拿到了，仍返回 200（缓存可用），但标明 `complete=false`，
+    便于前端/排查时区分「刷新成功」与「只拿到基金」。
+    """
     success = _refresh_stock_cache()
-    if success:
-        return {"message": "股票缓存刷新成功", "count": len(_stock_cache) if _stock_cache is not None else 0}
-    else:
-        raise HTTPException(status_code=500, detail="股票缓存刷新失败")
+    if not success:
+        raise HTTPException(status_code=500, detail="股票缓存刷新失败：所有数据源都不可用")
+    count = len(_stock_cache) if _stock_cache is not None else 0
+    return {
+        "message": "股票缓存刷新成功" if _cache_complete else "股票缓存刷新完成（个股列表拉取失败）",
+        "count": count,
+        "complete": _cache_complete,
+    }
 
 
 @router.get("/search/cache-info")
@@ -562,6 +758,7 @@ async def get_cache_info():
         "cache_date": _cache_date,
         "cache_time": _cache_time,
         "stock_count": len(df) if df is not None else 0,
+        "complete": _cache_complete,
         "cache_file": STOCK_CACHE_FILE,
         "dividend_cache": _dividend_cache_stats(),
     }

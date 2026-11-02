@@ -165,12 +165,24 @@ def test_dividend_cache_endpoints(client, mock_dividend):
     assert r.json()["size"] == 0
 
 
-def test_stock_search(client):
-    """搜索端点（依赖 akshare 缓存；没缓存时返回空数组）"""
+def test_stock_search(client, monkeypatch):
+    """搜索端点：不依赖外部数据源（缓存表直接注入），空关键词返回空数组。"""
+    import pandas as pd
+    import routers.stocks as stocks_mod
+
+    monkeypatch.setattr(
+        stocks_mod, "_stock_cache",
+        pd.DataFrame([{"code": "600519", "name": "贵州茅台", "asset_type": "股票"}]),
+    )
+    monkeypatch.setattr(stocks_mod, "_cache_date", stocks_mod._get_today_date())
+    monkeypatch.setattr(stocks_mod, "_cache_complete", True)
+
     r = client.get("/api/stocks/search?keyword=600519")
-    # 视环境：akshare 缓存可能可用也可能不可用；只验证端点存在且 200
     assert r.status_code == 200
-    assert isinstance(r.json(), list)
+    assert [x["code"] for x in r.json()] == ["600519"]
+
+    # 空 / 纯空白关键词：直接返回空，不触发缓存加载
+    assert client.get("/api/stocks/search?keyword=%20").json() == []
 
 
 def test_get_nonexistent_404(client):
