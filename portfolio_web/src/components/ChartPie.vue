@@ -182,12 +182,18 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/*
+  紧凑版：画布 300 → 170px，图例与内边距一并收。
+  饼图本来只表达「比例关系」，高度到 300px 时多出来的都是留白；
+  TOP5 图例仍然完整保留（它承担「认数」的职责），只是行高与字号变小。
+  两张图合计从 413px 降到约 240px。
+*/
 .chart-card {
   background: var(--card-bg, #fff);
   border: 1px solid var(--border-color, #e2e8f0);
   border-radius: var(--radius, 8px);
   box-shadow: var(--shadow, 0 1px 3px rgb(0 0 0 / 0.1));
-  padding: 16px 18px 12px;
+  padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
 }
@@ -197,11 +203,11 @@ onBeforeUnmount(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .chart-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary, #1e293b);
 }
@@ -214,12 +220,12 @@ onBeforeUnmount(() => {
 }
 
 .chart-total-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary, #64748b);
 }
 
 .chart-total-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--primary-color, #2563eb);
 }
@@ -228,7 +234,7 @@ onBeforeUnmount(() => {
   /* 注意：不要用 flex:1 —— 它等价于 flex-basis:0%，
      会覆盖 height 并与「卡片高度由内容决定」形成循环，导致高度塌成 0 */
   position: relative;
-  height: 300px;
+  height: 170px;
 }
 
 .chart-canvas {
@@ -249,7 +255,7 @@ onBeforeUnmount(() => {
 }
 
 .empty-icon {
-  font-size: 26px;
+  font-size: 22px;
   opacity: 0.5;
 }
 
@@ -262,18 +268,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px dashed var(--border-color, #e2e8f0);
 }
 
 .legend-caption {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--text-secondary, #94a3b8);
   letter-spacing: 0.04em;
-  line-height: 18px;
+  line-height: 16px;
   /* 与第一行图例文字基线对齐 */
   padding-top: 1px;
 }
@@ -283,7 +289,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 14px;
+  gap: 0 14px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -295,15 +301,15 @@ onBeforeUnmount(() => {
   gap: 5px;
   min-width: 0;
   max-width: 100%;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
   color: var(--text-primary, #1e293b);
 }
 
 .legend-dot {
   flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 2px;
 }
 

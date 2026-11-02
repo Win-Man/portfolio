@@ -26,8 +26,11 @@
           @recalc="handleGoalRecalc"
         />
 
-        <PortfolioCharts :assets="assets" />
-
+        <!--
+          顺序：概览 KPI → 目标 → 资产列表 → 分布图。
+          资产列表是本页的操作主体（增删改、刷新价格都在这儿），放最前面；
+          两张分布图是「看完数字之后的分析视图」，放列表下方，占 240px 也不挡首屏。
+        -->
         <AssetList 
           :assets="assets" 
           :loading="loadingAssets"
@@ -37,6 +40,8 @@
           @refresh="handleRefreshPrice"
           @refreshAll="handleRefreshAllPrices"
         />
+
+        <PortfolioCharts :assets="assets" />
       </template>
     </main>
 

@@ -52,8 +52,9 @@ const colorMap = computed(() =>
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin: 12px 0 16px;
+  gap: 12px;
+  /* 现在排在资产列表下方，只需上方间隔；底部留白交给页面 */
+  margin: 16px 0 0;
 }
 
 @media (max-width: 900px) {

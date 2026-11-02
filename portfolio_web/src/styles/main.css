@@ -189,13 +189,18 @@ body {
 /* 概览卡片网格 */
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  /*
+    minmax 从 220 → 180px：1100px 宽的窗口里 5 张卡原本会掉成「4 + 1」两行，
+    白占一行高度。180px × 5 + 12px × 4 = 948px，1024 宽也能一行放完；
+    卡片变窄后金额字号由 .value 的容器查询自动缩放，不会折行。
+  */
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .overview-item {
-  padding: 16px;
+  padding: 12px 14px;
   background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
   border-radius: var(--radius);
   color: white;
@@ -250,11 +255,11 @@ body {
 }
 
 .overview-desc {
-  margin-bottom: 24px;
-  padding: 12px 16px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
   background: var(--bg-color);
   border-radius: var(--radius);
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
