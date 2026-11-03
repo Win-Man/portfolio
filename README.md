@@ -253,6 +253,38 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 | 个股历史分红 | akshare `stock_dividend_cninfo` | 字段名按 akshare 当前版本硬编码 |
 | ETF 历史分红 | akshare `fund_etf_dividend_sina` | 返回**累计分红**，代码内做相邻差分还原每期金额 |
 
+### 网络与代理（NO_PROXY）
+
+行情请求**默认直连**，不吃系统代理。开发机常驻 `HTTP_PROXY=127.0.0.1:xxxx`
+（Clash / Surge 之类），akshare 与 httpx 默认都会走它，于是出现「搜不到股票 /
+拉不到分红 / 日K 为空」——日志里只有一行 warning，看起来像业务 bug。
+
+`portfolio_api/net.py` 做了两层：
+
+| 层 | 手段 | 作用对象 |
+|---|---|---|
+| 环境变量 | 启动时把行情域名并进 `NO_PROXY` / `no_proxy`（只追加、不覆盖） | akshare（底层 requests，唯一可用的开关） |
+| 显式参数 | 自建 httpx 客户端传 `trust_env=False` | 腾讯行情 / 日K（`routers/stocks.py`、`routers/assets.py`、`watchlist_history.py`） |
+
+内置清单：`qt.gtimg.cn`、`gtimg.cn`、`ifzq.gtimg.cn`、`sinajs.cn`、`sina.com.cn`、
+`eastmoney.com`、`cninfo.com.cn`、`sse.com.cn`、`szse.cn`、`10jqka.com.cn`、
+`hexun.com`、`xueqiu.com`、`localhost`、`127.0.0.1`。写裸域名而不是 `.x.com`：
+requests 与 httpx 都按后缀匹配，裸域名同时覆盖自身与所有子域。
+
+两个开关（`.env`）：
+
+```bash
+# 需要走代理（例如海外网络访问国内行情源）时设 false，两层同时关闭
+NET_BYPASS_PROXY=true
+# 追加要绕过代理的域名，逗号分隔，与内置清单合并
+NO_PROXY_HOSTS=my-quote.example
+```
+
+⚠️ 绕过后仍连不通的域名，多半是**数据源自己挂了**，不是代理问题。
+例：东财 `82.push2.eastmoney.com` 这类带编号的 push2 子域目前会 `RemoteProtocolError`
+（直连、走代理都一样），所以 akshare 的 `stock_zh_a_spot_em` 在本机不可用；
+搜索的真正兜底是「沿用上次缓存 + 6 位代码问腾讯行情」。
+
 ### 搜索口径（名称归一化 + 缓存兜底）
 
 数据源给的名称**不能直接拿来做包含匹配**：沪深两市有 36 只 3~4 字老股票用空格补齐
@@ -340,6 +372,7 @@ rm portfolio_api/portfolio.db portfolio_api/stock_cache.json
 | 某只股票搜不到（如 `000858`） | ① 名称带排版空格（数据源给的是「五 粮 液」）；② 标的列表缓存只剩基金 | ① 已在 `normalize_name` 里归一化，不会再出现；② `GET /api/stocks/search/cache-info` 看 `complete`，`false` 表示个股来源失败，600s 后自动重试，也可 `POST /api/stocks/search/refresh` |
 | `npm run dev` 报 `vite: command not found` | node_modules 是错平台二进制 | `rm -rf node_modules package-lock.json && npm install` |
 | 前端调后端 CORS 报错 | 没用 vite proxy | 检查 `vite.config.js` 中 `server.proxy['/api']` 是否存在 |
+| 拉行情报 `ProxyError` / 行情全走 mock | 本机 `HTTP_PROXY` 把行情域名代理坏了 | 默认已绕过（`net.py`），启动日志会打印 `行情请求已绕过代理：NO_PROXY=…`；若被 `NET_BYPASS_PROXY=false` 关掉，改回 `true` |
 
 ## 目录结构
 
@@ -355,6 +388,7 @@ portfolio_api/
 ├── watchlist_scheduler.py  # ★ 观察池每日快照定时任务（asyncio + zoneinfo，零新依赖）
 ├── watchlist_history.py    # ★ 观察池历史回填（腾讯日K × 当日滚动 12 个月分红 → 历史快照）
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
+├── net.py              # ★ 行情请求绕过系统代理（NO_PROXY + trust_env=False）
 ├── routers/
 │   ├── portfolios.py   # 组合 CRUD + summary
 │   ├── assets.py       # 资产 CRUD + 刷新价格 + TTM 计算
@@ -428,7 +462,7 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：234 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ ETF /
+# 后端：243 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ 代理绕过 9 例 / ETF /
 #       历年分红口径（含刷新响应回归）/ 成本盈亏含负成本与高精度成本 / 刷新缓存时效 /
 #       年收入目标 19 例 / 组合管理 6 例 / 收入日历 24 例 / 观察池 53 例）
 cd portfolio_api && uv run pytest -q

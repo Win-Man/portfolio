@@ -41,6 +41,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from config import settings
+import net
 from market import market_code, normalize_code
 from models import WatchlistItem, WatchlistSnapshot
 from routers.assets import _parse_dividend_date, _sum_trailing_12m
@@ -143,7 +144,8 @@ async def fetch_daily_closes(
     cursor = end
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # trust_env=False：忽略环境代理直连行情源，见 net.py
+        async with httpx.AsyncClient(**net.client_kwargs(timeout=15.0)) as client:
             for _ in range(KLINE_MAX_PAGES):
                 resp = await client.get(
                     KLINE_URL,

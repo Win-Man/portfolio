@@ -14,6 +14,7 @@ import time
 from urllib.parse import quote
 
 from config import settings
+import net
 from market import (
     guess_asset_type,
     is_etf,
@@ -99,7 +100,8 @@ async def fetch_price_from_tencent(stock_code: str) -> dict:
     market_code = get_market_code(stock_code)
     
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # trust_env=False：忽略环境代理直连行情源，见 net.py
+        async with httpx.AsyncClient(**net.client_kwargs(timeout=10.0)) as client:
             response = await client.get(f"{settings.tencent_quote_url}={market_code}")
             text = response.text
         

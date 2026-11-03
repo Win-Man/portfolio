@@ -8,6 +8,7 @@ import httpx
 import re
 
 from config import settings
+import net
 from database import get_db
 from market import (
     guess_asset_type,
@@ -144,7 +145,8 @@ async def fetch_real_time_price(stock_code: str, current_price: float = 0, divid
     market_code = get_tencent_market_code(stock_code)
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # trust_env=False：忽略环境代理直连行情源，见 net.py
+        async with httpx.AsyncClient(**net.client_kwargs(timeout=10.0)) as client:
             response = await client.get(f"{TENCENT_STOCK_URL}={market_code}")
             text = response.text
 

@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     # ---- 外部数据源 ----
     tencent_quote_url: str = "https://qt.gtimg.cn/q"
 
+    # ---- 网络 / 代理 ----
+    # 行情类请求一律直连、忽略 HTTP(S)_PROXY：本机代理（Clash 等）会把
+    # eastmoney 等域名代理坏，表现为「搜不到股票 / 拉不到分红」。
+    # 需要走代理（例如海外网络）时设为 false，两层绕过同时关闭。
+    net_bypass_proxy: bool = True
+    # 追加要绕过代理的域名（逗号分隔），与内置行情域名清单合并
+    no_proxy_hosts: str = ""
+
     # ---- 观察池每日快照（spec 003 D6）----
     # 定时任务开关：测试环境必须设为 false（否则会起后台任务并发真实网络请求）
     watchlist_snapshot_enabled: bool = True

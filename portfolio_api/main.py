@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from config import settings
+import net
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
 from routers import portfolios, assets, stocks, goals, calendar, watchlist
@@ -22,6 +23,10 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# 行情请求绕过本机代理：把行情域名并进 NO_PROXY（akshare 只认环境变量）。
+# 必须在任何外呼之前执行；后台快照任务与本进程共用同一份环境。
+net.ensure_setup()
 
 # 应用启动时建表 + 跑轻量迁移
 Base.metadata.create_all(bind=engine)
