@@ -46,6 +46,12 @@ portfolio/
   - 「转入持仓」：跳回 `#/` 并打开既有资产表单、预填代码 / 名称 / 现价（数量自己填），仍走既有写入接口，没有第二条资产写入链路
   - 只有**真实价**才落库：行情降级模拟价时不写快照，保留上次数据并提示「行情获取失败，已保留上次数据」
 
+- **后台管理**（header 第四个 tab，`#/admin`）：看两个每日定时任务的状态与历史
+  - **投资组合价格刷新**（默认 15:05）：把全部资产的最新价刷成当日收盘价，同代码只请求一次，只写真实价
+  - **观察池每日快照**（默认 15:30）：给每只观察标的抓行情 + TTM 分红写当天快照，只补缺不覆盖
+  - 每个任务卡片展示：计划时刻、**最后运行时间**、上次结果与耗时、下次预计运行、累计运行次数与状态分布；下方是运行历史（触发方式 / 结果 / 耗时 / 成功失败数 / 说明 + 逐条失败原因）
+  - 支持「**立即运行**」：不用等到点，跑完立即刷新卡片与历史；页面每 30 秒自动刷新
+
 > 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
 
 ## 环境要求
@@ -121,6 +127,21 @@ npm run preview  # 预览生产构建
 
 目标接口的错误约定：组合不存在 → `404 Portfolio not found`；目标不存在或不属于该组合 → `404 Goal not found`；名称为纯空白 / 金额 ≤ 0 / `assumed_yield` 越界 → `422`；同组合重名 → `409 同名目标已存在`。
 所有「无意义」的数值（如市值为 0 时的所需收益率）返回 `null` 而不是 `0`，前端显示「—」。
+
+### 后台管理（定时任务）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/jobs` | 两个任务的配置（开关 / 计划时刻 / 时区）+ **最后运行时间** + 下次预计运行 + 累计运行与状态分布 |
+| GET | `/api/admin/jobs/{key}/runs?limit=20&offset=0` | 运行历史，**新的在前**（`limit` 1–100） |
+| POST | `/api/admin/jobs/{key}/run` | 立即执行一次（不受开关与时刻限制），返回本次运行记录 |
+
+`key` 只有两个：`asset_price_refresh`（价格刷新）、`watchlist_snapshot`（观察池快照）。未知 key → `404 任务不存在`。
+
+时间口径：返回的是 **Asia/Shanghai 的墙上时间**（`2026-11-03T15:05:12`，不带时区后缀）——
+任务由「15:30 这种本地时刻」驱动，前端直接按本地显示，不做时区换算。
+
+状态：`running` / `success` / `partial`（部分失败）/ `failed` / `skipped`（到点但没活干）。
 
 ### 收入日历
 
@@ -215,13 +236,33 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 - 长区间上偶尔会冒出一根很高的尖峰（交通银行 2014 / 2017 / 2019 / 2021 年都被顶到 9%~15%）：那是**相邻两期年报的除权日相隔不足 365 天**，两期同时落在「往前 365 天」这个闭区间里 —— 是 TTM 口径的边界现象，等旧一期滚出窗口（通常几天内）就自动回落，不是数据错误。尖峰正好落在除权竖线上，可以对照 tooltip 里的「除权日 · 每股派」自行验证。
 - 日K 用**不复权**价：送转股当天价格会按比例跳水（交通银行 2011 年是 10 送 1），对应日期的股息率会相应抬升。用前复权反而会把历史价按分红整体下折，算出系统性偏高的股息率，所以这里刻意选择不复权 + 当期实际分红。
 
-#### 定时快照任务
+#### 定时任务与后台管理
 
-- 实现：`portfolio_api/watchlist_scheduler.py`，在 `main.py` 的 `lifespan` 里 `asyncio.create_task` 启动，关闭时 `cancel()` + `await` 收尾。**零新依赖**（标准库 `asyncio` + `zoneinfo`，不引入 APScheduler / celery）。
-- 每 60 秒一个 tick，且**启动即 tick**：服务在 15:30 之后启动会立刻补抓当天缺失的快照，不用等到第二天。
-- 默认 `15:30`（Asia/Shanghai）；`WATCHLIST_SNAPSHOT_TIME=09:00` 覆盖；`WATCHLIST_SNAPSHOT_ENABLED=false` 整体关闭（**测试环境默认关闭**，不起后台任务、不发真实网络请求）。时间串解析失败时记 warning 并回退 15:30，不会启动即崩。
-- 同一 `trade_date` 最多尝试 **3 轮**，避免数据源整体挂掉时每分钟重试一整天。
-- **单 worker 限制**：`uvicorn --workers N`（N > 1）时每个进程都会跑这个循环 —— 同一天的快照靠唯一约束 + UPSERT 幂等，不会写重，但会**重复抓取**同一标的。本期不做跨进程锁，生产部署请用单 worker，或把定时抓取挪到外部调度。
+两个每日任务，共用一个调度循环（`portfolio_api/scheduler.py`），在 `main.py` 的 `lifespan` 里
+`asyncio.create_task` 启动，关闭时 `cancel()` + `await` 收尾。**零新依赖**
+（标准库 `asyncio` + `zoneinfo`，不引入 APScheduler / celery）。
+
+| key | 干什么 | 默认时刻 | 开关 |
+|---|---|---|---|
+| `asset_price_refresh` | 投资组合全部资产的最新价刷成当日行情价 | 15:05 | `ASSET_PRICE_REFRESH_ENABLED` / `ASSET_PRICE_REFRESH_TIME` |
+| `watchlist_snapshot` | 每只观察标的的当日快照（行情 + TTM 分红） | 15:30 | `WATCHLIST_SNAPSHOT_ENABLED` / `WATCHLIST_SNAPSHOT_TIME` |
+
+时刻为什么这么排：15:00 收盘，15:05 取到的是收盘价；15:30 留出间隔，避免两个任务同时打行情接口。
+
+- 每 60 秒一个 tick，且**启动即 tick**：服务在 15:05 之后启动会立刻补跑当天该跑的任务，不用等到第二天。
+- 同一任务同一天最多尝试 **3 轮**（`partial` / `failed` 才重试），避免数据源整体挂掉时每分钟重试一整天。
+  `success` 与 `skipped` 都算「今天已有结论」，不会再跑。
+- **每次执行都写一条 `job_runs`**（`job_key / trigger / status / 起止时间 / 耗时 / 总数 / 成功 / 失败 / 说明 / 逐条错误`），
+  后台管理页的「最后运行时间」与历史全部来自这张表。
+- 「到点但没有活干」（如观察池今天已经齐了）**每天只留一条 `skipped`**：既能看到「今天跑过、确实无需更新」，
+  又不会每分钟攒一条垃圾记录。手动触发一定落库 —— 点了按钮就该看到记录。
+- 价格任务只做三件事：写 `price`、写 `price_source=real`、有 TTM 分红时重算 `ttm_yield`。
+  **不改 `dividend_per_share`**（那是分红事实，由分红历史算），**不写 mock 价**（±3% 随机数会污染盈亏与占比）。
+- **单 worker 限制**：`uvicorn --workers N`（N > 1）时每个进程都会跑这个循环 —— 写库幂等（快照 UPSERT、
+  价格重复写同一个值），但会**重复抓取**。生产部署请用单 worker，或把定时抓取挪到外部调度。
+
+后台管理页（`#/admin`）只**读 + 触发**，不改配置：计划时刻与开关都在 `.env`，改完重启后端生效
+（做成运行时可变就得额外落配置表、还要处理多进程重读，对自用工具不划算）。
 
 #### 与「投资组合」页共用的视觉骨架
 
@@ -385,7 +426,7 @@ portfolio_api/
 ├── schemas.py          # Pydantic
 ├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记 / 分红状态与来源归类）
 ├── watchlist_math.py   # ★ 观察池口径唯一实现（当前股息率 / 触发价 / 两条信号 / 陈旧判定，纯函数）
-├── watchlist_scheduler.py  # ★ 观察池每日快照定时任务（asyncio + zoneinfo，零新依赖）
+├── scheduler.py        # ★ 定时任务引擎（注册表 / 每日循环 / 3 次重试 / job_runs 记录）+ 两个任务
 ├── watchlist_history.py    # ★ 观察池历史回填（腾讯日K × 当日滚动 12 个月分红 → 历史快照）
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── net.py              # ★ 行情请求绕过系统代理（NO_PROXY + trust_env=False）
@@ -395,6 +436,7 @@ portfolio_api/
 │   ├── goals.py        # 年收入目标 CRUD + 进度计算
 │   ├── calendar.py     # 收入日历：按派息日归月 + 确认 / 补录
 │   ├── watchlist.py    # ★ 观察池 CRUD + 每日快照 UPSERT + 走势序列
+│   ├── admin.py        # ★ 后台管理：任务配置 / 最后运行时间 / 运行历史 / 立即运行
 │   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派，含分红 in-memory 缓存）
 ├── tests/
 │   ├── conftest.py
@@ -403,6 +445,7 @@ portfolio_api/
 │   ├── test_calendar.py          # 收入日历：聚合 / 状态映射 / 确认幂等 / 补录 / 边界
 │   ├── test_portfolio_manage.py  # 组合新增 / 重命名 / 删除：名称校验与级联
 │   ├── test_watchlist.py         # ★ 观察池：CRUD / 校验 / 两条信号 / 快照 UPSERT / mock 不落库 / 历史回填
+│   ├── test_admin_jobs.py        # ★ 定时任务：任务卡片 / 手动触发 / 同码去重 / mock 不落库 / 重试与跳过
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
@@ -411,12 +454,13 @@ portfolio_web/
 ├── scripts/
 │   └── verify-chart-tooltip.mjs  # 用 CDP 验证饼图悬浮提示
 └── src/
-    ├── App.vue                   # 应用外壳：三个 tab（组合 / 日历 / 观察池）+ 组合选择器 + 组合管理
-    ├── router.js                 # vue-router（hash 模式）：/、/calendar、/watchlist
+    ├── App.vue                   # 应用外壳：四个 tab（组合 / 日历 / 观察池 / 后台管理）+ 组合选择器
+    ├── router.js                 # vue-router（hash 模式）：/、/calendar、/watchlist、/admin
     ├── views/
     │   ├── Portfolio.vue
     │   ├── CalendarView.vue      # ★ 收入日历（年/月视图 + 月 Sheet + 确认 / 补录）
-    │   └── WatchlistView.vue     # ★ 观察池（KPI 汇总卡 + 「观察标的」卡片 + 表格 + 展开行双轴走势）
+    │   ├── WatchlistView.vue     # ★ 观察池（KPI 汇总卡 + 「观察标的」卡片 + 表格 + 展开行双轴走势）
+    │   └── AdminView.vue         # ★ 后台管理（任务卡片 + 最后运行时间 + 运行历史 + 立即运行）
     ├── components/
     │   ├── PortfolioOverview.vue
     │   ├── PortfolioGoals.vue    # ★ 年收入目标区块（进度条 / 两条路径 / 假设收益率）
@@ -446,6 +490,8 @@ portfolio_web/
     │   ├── watchlist.js          # ★ 观察池展示纯函数（信号→文案/色、排序、序列、格式化、汇总）
     │   ├── watchlist.test.mjs
     │   ├── watchlistColors.js    # ★ 观察池信号色与曲线色（集中管理）
+    │   ├── jobs.js               # ★ 后台管理展示纯函数（时间拆分格式化 / 状态 / 概览汇总）
+    │   ├── jobs.test.mjs
     │   └── chartColors.js        # 跨图共享配色
     ├── composables/
     │   ├── useToast.js
@@ -455,6 +501,7 @@ portfolio_web/
     │   ├── goal.js               # 目标接口（无假数据兜底，透传后端 detail）
     │   ├── calendar.js           # 日历 / 确认 / 补录接口（同上）
     │   ├── watchlist.js          # ★ 观察池接口（无假数据兜底，透传后端 detail）
+    │   ├── admin.js              # ★ 定时任务接口（任务列表 / 历史 / 立即运行）
     │   └── stock.js
     └── styles/main.css
 ```
@@ -462,13 +509,14 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：243 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ 代理绕过 9 例 / ETF /
+# 后端：262 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ 代理绕过 9 例 /
+#       定时任务 19 例（同码去重 / mock 不落库 / 3 次重试 / 跳过只记一条 / 崩溃留痕）/ ETF /
 #       历年分红口径（含刷新响应回归）/ 成本盈亏含负成本与高精度成本 / 刷新缓存时效 /
 #       年收入目标 19 例 / 组合管理 6 例 / 收入日历 24 例 / 观察池 53 例）
 cd portfolio_api && uv run pytest -q
 
-# 前端：107 个用例（数字格式化 / 价格精度、成本↔总额换算、饼图数据整理、TOP N 取数、悬浮提示、
-#       目标展示 18 例、日历纯函数 15 例、观察池展示纯函数 19 例）
+# 前端：118 个用例（数字格式化 / 价格精度、成本↔总额换算、饼图数据整理、TOP N 取数、悬浮提示、
+#       目标展示 18 例、日历纯函数 15 例、观察池展示纯函数 19 例、后台管理展示 11 例）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）

@@ -17,10 +17,15 @@
           class="app-tab"
           :class="{ active: isWatchlistTab }"
         >观察池</router-link>
+        <router-link
+          to="/admin"
+          class="app-tab"
+          :class="{ active: isAdminTab }"
+        >后台管理</router-link>
       </nav>
 
       <!-- 观察池是全局清单，不绑定组合：该 tab 下隐藏组合选择器与组合增删改按钮（D1） -->
-      <div v-if="!isWatchlistTab" class="header-actions">
+      <div v-if="showPortfolioActions" class="header-actions">
         <div class="portfolio-selector">
           <label>选择组合：</label>
           <select
@@ -112,6 +117,9 @@ const route = useRoute()
 const isPortfolioTab = computed(() => route.name === 'portfolio')
 const isCalendarTab = computed(() => route.name === 'calendar')
 const isWatchlistTab = computed(() => route.name === 'watchlist')
+const isAdminTab = computed(() => route.name === 'admin')
+// 观察池 / 后台管理都与「当前选中的组合」无关，隐藏组合选择器与组合增删按钮
+const showPortfolioActions = computed(() => !isWatchlistTab.value && !isAdminTab.value)
 
 const toastRef = ref(null)
 

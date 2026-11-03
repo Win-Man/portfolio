@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # 每日抓取时刻（Asia/Shanghai）。格式 "HH:MM"；解析失败时回退 15:30，不启动即崩
     watchlist_snapshot_time: str = "15:30"
 
+    # ---- 投资组合价格每日刷新 ----
+    # 收盘后把全部资产的最新价刷成当日价。测试环境同样要设为 false。
+    asset_price_refresh_enabled: bool = True
+    # 15:00 收盘 → 15:05 取到的是收盘价；比观察池快照早 25 分钟，避免同时打接口
+    asset_price_refresh_time: str = "15:05"
+
     # ---- 观察池历史回填 ----
     # 新加入的标的首次刷新时，用真实日K + 历史分红补一段快照，走势图才有历史可看。
     # 测试环境必须设为 false（否则首次刷新会发真实日K请求）。

@@ -22,6 +22,9 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_db_tmpfile.name}")
 # 对观察池里的标的发真实网络请求（spec 003 §6.5 / §8-12）。
 os.environ.setdefault("WATCHLIST_SNAPSHOT_ENABLED", "false")
 
+# 投资组合价格每日刷新任务：同理关闭，避免后台任务打真实行情接口。
+os.environ.setdefault("ASSET_PRICE_REFRESH_ENABLED", "false")
+
 # 观察池历史回填：默认关闭 —— 否则「首次刷新」会去拉真实日K。
 # 需要验回填的用例自己 monkeypatch settings 打开（见 test_watchlist.py）。
 os.environ.setdefault("WATCHLIST_BACKFILL_ENABLED", "false")
@@ -47,10 +50,14 @@ def _reset_db():
     # 清日K「已补到哪一天」的进程内缓存，避免用例间互相影响
     from watchlist_history import reset_history_cache
     reset_history_cache()
+    # 清「今天这个任务试过几次」的内存计数
+    from scheduler import reset_attempt_state
+    reset_attempt_state()
     yield
     # 测试后清理分红缓存
     invalidate_dividend_cache()
     reset_history_cache()
+    reset_attempt_state()
 
 
 @pytest.fixture

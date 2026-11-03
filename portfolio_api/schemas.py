@@ -424,3 +424,50 @@ class WatchlistDividendResponse(BaseModel):
 
     ex_date: date
     dividend_per_share: float
+
+
+# ========== 后台管理：定时任务 ==========
+# 时间字段一律是 **Asia/Shanghai 的墙上时间**（naive，不带时区后缀）：
+# 任务由「15:30 这种本地时刻」驱动，前端直接按本地格式化即可，不做时区换算。
+
+class JobRunResponse(BaseModel):
+    """一次任务执行。errors 已从 JSON 文本还原成数组。"""
+
+    id: int
+    job_key: str
+    trigger: str                      # schedule / manual
+    status: str                       # running / success / partial / failed / skipped
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_ms: int = 0
+    total: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    message: str = ""
+    errors: List[str] = []
+
+
+class JobInfoResponse(BaseModel):
+    """后台管理页一个任务卡片需要的全部信息。"""
+
+    key: str
+    name: str
+    description: str
+    enabled: bool
+    schedule_time: str                # "15:30"
+    schedule_label: str               # "每天 15:30（Asia/Shanghai）"
+    timezone: str = "Asia/Shanghai"
+    # 已禁用时为 None：不想让界面显示「下次 15:05 运行」却永远不跑
+    next_run_at: Optional[datetime] = None
+    last_run: Optional[JobRunResponse] = None     # 「最后运行时间」取 started_at
+    last_success_at: Optional[datetime] = None
+    total_run_count: int = 0
+    status_counts: dict = {}          # {success: 12, failed: 1, ...}
+    errors_hint: Optional[str] = None  # 最近一次失败的第一条原因
+
+
+class JobRunListResponse(BaseModel):
+    items: List[JobRunResponse]
+    total: int
+    limit: int
+    offset: int

@@ -12,8 +12,8 @@ from config import settings
 import net
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
-from routers import portfolios, assets, stocks, goals, calendar, watchlist
-from watchlist_scheduler import run_scheduler
+from routers import portfolios, assets, stocks, goals, calendar, watchlist, admin
+from scheduler import get_job_specs, run_scheduler
 
 # 配置日志：开发期人类可读，生产可改 JSON formatter
 logging.basicConfig(
@@ -76,10 +76,10 @@ async def lifespan(app: FastAPI):
     """应用启动/关闭钩子（替代已弃用的 @app.on_event）。"""
     init_sample_data()
 
-    # 观察池每日快照：后台协程，关闭时 cancel 并 await 收尾（spec 003 §6.5）。
-    # 测试环境（conftest 设 WATCHLIST_SNAPSHOT_ENABLED=false）不启动任何后台任务。
+    # 定时任务：观察池快照 + 投资组合价格刷新，共用一个后台协程，
+    # 关闭时 cancel 并 await 收尾。测试环境（conftest 把两个开关都设为 false）不启动。
     scheduler_task = None
-    if settings.watchlist_snapshot_enabled:
+    if any(spec.enabled for spec in get_job_specs().values()):
         scheduler_task = asyncio.create_task(run_scheduler())
 
     logger.info("portfolio_api startup complete (db=%s)", settings.database_url)
@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
             except Exception:  # 收尾阶段的异常只记日志，不阻塞关闭
-                logger.exception("watchlist scheduler shutdown failed")
+                logger.exception("scheduler shutdown failed")
         logger.info("portfolio_api shutting down")
 
 
@@ -119,6 +119,7 @@ app.include_router(stocks.router)
 app.include_router(goals.router)
 app.include_router(calendar.router)
 app.include_router(watchlist.router)
+app.include_router(admin.router)
 
 
 # ---------- 种子数据 ----------

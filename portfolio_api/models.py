@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -169,3 +169,33 @@ class DividendConfirmation(Base):
     confirmed_status = Column(String, default="paid")      # 当前恒为 paid
 
     portfolio = relationship("Portfolio", back_populates="dividend_confirmations")
+
+
+class JobRun(Base):
+    """定时任务的一次执行记录（后台管理页的「最后运行时间」与历史都取自这里）。
+
+    **时间存的是 Asia/Shanghai 的墙上时间（naive）**，与 `created_at` 的
+    `server_default=func.now()`（SQLite 里是 UTC）不同 —— 这是刻意的：
+    任务时间由 `WATCHLIST_SNAPSHOT_TIME` 这类本地时刻决定，展示时不该再做时区换算，
+    否则「15:30 跑的任务」会显示成 07:30，看起来像 bug。
+
+    `errors` 是 JSON 数组文本（最多留 20 条），不建子表：一次运行的逐条失败
+    只是给用户扫一眼，没有查询需求，单独建表反而增加连接与清理成本。
+    """
+
+    __tablename__ = "job_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_key = Column(String, nullable=False, index=True)   # watchlist_snapshot / asset_price_refresh
+    trigger = Column(String, nullable=False, default="schedule")  # schedule / manual
+    # running / success / partial / failed / skipped（白名单见 scheduler.JOB_STATUSES）
+    status = Column(String, nullable=False, default="running")
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, default=0)               # 便于按「慢任务」排序
+    total = Column(Integer, default=0)                     # 计划处理数（标的 / 资产）
+    succeeded = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    message = Column(String, default="")                   # 一句话结论，直接展示
+    errors = Column(Text, default="")                      # JSON 数组文本，逐条失败原因
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

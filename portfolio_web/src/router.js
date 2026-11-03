@@ -3,6 +3,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import Portfolio from './views/Portfolio.vue'
 import CalendarView from './views/CalendarView.vue'
 import WatchlistView from './views/WatchlistView.vue'
+import AdminView from './views/AdminView.vue'
 import { ensurePortfoliosLoaded, selectedPortfolioId } from './composables/usePortfolioContext.js'
 
 const routes = [
@@ -10,6 +11,8 @@ const routes = [
   { path: '/calendar', name: 'calendar', component: CalendarView },
   // 观察池是全局的（不绑定组合），因此守卫里不为它做「组合是否已选」的兜底
   { path: '/watchlist', name: 'watchlist', component: WatchlistView },
+  // 后台管理同样与组合无关：定时任务是全局的
+  { path: '/admin', name: 'admin', component: AdminView },
 ]
 
 const router = createRouter({
