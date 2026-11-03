@@ -12,25 +12,32 @@
         <div v-if="loadingSummary" class="loading">加载汇总数据...</div>
         <PortfolioOverview v-else :summary="summary" />
 
-        <PortfolioGoals
-          :goals="goals"
-          :selected-goal-id="selectedGoalId"
-          :progress="goalProgress"
-          :loading="loadingGoals"
-          :progress-loading="progressLoading"
-          :error="goalError"
-          @update:selected-goal-id="selectedGoalId = $event"
-          @add="openAddGoalModal"
-          @edit="openEditGoalModal"
-          @remove="handleGoalRemove"
-          @recalc="handleGoalRecalc"
-        />
-
         <!--
-          顺序：概览 KPI → 目标 → 资产列表 → 分布图。
-          资产列表是本页的操作主体（增删改、刷新价格都在这儿），放最前面；
-          两张分布图是「看完数字之后的分析视图」，放列表下方，占 240px 也不挡首屏。
+          分析栏：年收入目标 + 持仓市值分布 + 预计年收入分布同处一行。
+          三者读的是同一份持仓快照 —— 目标进度回答「离目标还差多少」，
+          两张饼图回答「钱和收入分别压在哪只标的上」，并排才方便对照。
+          注意 PortfolioCharts 是多根节点（两个饼图卡直接充当网格列），
+          且只有它走异步加载，目标卡片不跟着等 echarts 的 chunk。
         -->
+        <div class="insight-row">
+          <PortfolioGoals
+            :goals="goals"
+            :selected-goal-id="selectedGoalId"
+            :progress="goalProgress"
+            :loading="loadingGoals"
+            :progress-loading="progressLoading"
+            :error="goalError"
+            @update:selected-goal-id="selectedGoalId = $event"
+            @add="openAddGoalModal"
+            @edit="openEditGoalModal"
+            @remove="handleGoalRemove"
+            @recalc="handleGoalRecalc"
+          />
+
+          <PortfolioCharts :assets="assets" />
+        </div>
+
+        <!-- 资产列表是本页的操作主体（增删改、刷新价格都在这儿），放在分析栏之后 -->
         <AssetList 
           :assets="assets" 
           :loading="loadingAssets"
@@ -40,8 +47,6 @@
           @refresh="handleRefreshPrice"
           @refreshAll="handleRefreshAllPrices"
         />
-
-        <PortfolioCharts :assets="assets" />
       </template>
     </main>
 
@@ -474,3 +479,31 @@ async function handleRefreshAllPrices() {
   }
 }
 </script>
+
+<style scoped>
+/*
+  分析栏：年收入目标 + 两张分布饼图同处一行。
+  1.15 : 1 : 1 —— 目标卡要留一点额外宽度给「再投入 ¥X 本金，或整体息率达 Y%」这句
+  会换行的话术；饼图只要够画出圆环 + TOP5 图例即可。
+*/
+.insight-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 16px;
+}
+
+/*
+  1120 以下三块竖排（不做「目标卡独占一行 + 两张饼图并排」的中间档）：
+  那档里目标卡被拉成整行宽，四行摘要挤在左侧、右边空出一大片，反而更难看。
+  三列要撑到 1120 才安全 —— 1152 宽时目标卡约 383px，「当前 ¥4,656.40 月均 ¥388.03」
+  一行正好 200px 出头；再窄 20px，金额就会被省略号吃掉（比少一列难看得多）。
+  竖排后卡片自己按宽度把摘要切成两列（PortfolioGoals 的容器查询）。
+*/
+@media (max-width: 1120px) {
+  .insight-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>

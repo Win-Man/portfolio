@@ -196,6 +196,8 @@ onBeforeUnmount(() => {
   padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
+  /* 本卡片是 .insight-row 的网格列，min-width:0 才能被压缩而不撑破列宽 */
+  min-width: 0;
 }
 
 .chart-header {

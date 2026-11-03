@@ -1,20 +1,26 @@
 <template>
-  <div v-if="assets.length > 0" class="charts-grid">
-    <ChartPie
-      title="持仓市值分布"
-      :items="valueItems"
-      :color-map="colorMap"
-      total-label="资产总额"
-      empty-text="暂无持仓市值数据"
-    />
-    <ChartPie
-      title="预计年收入分布"
-      :items="incomeItems"
-      :color-map="colorMap"
-      total-label="预计年收入"
-      empty-text="暂无分红数据（可点「批量刷新价格」拉取）"
-    />
-  </div>
+  <!--
+    两张分布饼图。本组件是**多根节点**（不包 div）：
+    它被放进 Portfolio.vue 的 `.insight-row` 网格里，两个饼图卡直接充当网格列，
+    与左侧「年收入目标」卡片并排。多包一层 div 就得靠 display:contents
+    把中间层拆掉，反而更脆。
+    另外这里必须保持「只有 echarts 部分」—— 整块走异步加载（约 460KB），
+    目标卡片不能跟着一起等 chunk 下载，所以它留在 Portfolio.vue 里。
+  -->
+  <ChartPie
+    title="持仓市值分布"
+    :items="valueItems"
+    :color-map="colorMap"
+    total-label="资产总额"
+    empty-text="暂无持仓市值数据"
+  />
+  <ChartPie
+    title="预计年收入分布"
+    :items="incomeItems"
+    :color-map="colorMap"
+    total-label="预计年收入"
+    empty-text="暂无分红数据（可点「批量刷新价格」拉取）"
+  />
 </template>
 
 <script setup>
@@ -47,19 +53,3 @@ const colorMap = computed(() =>
   buildColorMap(stableNameOrder(props.assets, (a) => a.holding_value))
 )
 </script>
-
-<style scoped>
-.charts-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  /* 现在排在资产列表下方，只需上方间隔；底部留白交给页面 */
-  margin: 16px 0 0;
-}
-
-@media (max-width: 900px) {
-  .charts-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-</style>

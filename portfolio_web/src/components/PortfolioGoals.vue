@@ -1,144 +1,142 @@
 <template>
-  <section class="goal-section">
-    <!-- 1. 标题栏：目标下拉并排放在标题右侧，不再单独占一行 -->
-    <div class="goal-header">
-      <div class="goal-head-left">
-        <h2 class="goal-title">🎯 年收入目标</h2>
-        <select
-          id="goal-selector"
-          class="goal-selector"
-          aria-label="选择目标"
-          :value="selectedGoalId ?? ''"
-          :disabled="goals.length === 0"
-          @change="handleSelectChange"
-        >
-          <option v-if="goals.length === 0" value="">暂无目标</option>
-          <option v-for="goal in goals" :key="goal.id" :value="goal.id">{{ goal.name }}</option>
-        </select>
-      </div>
+  <!--
+    紧凑卡片：左侧环形进度（完成度），右侧「当前 / 目标 / 缺口 / 达成路径」四行摘要。
+    四块数字不再各占一张彩色卡片 —— 原布局 4 张卡要占 100px 高、还要各自重复
+    「月均」副标题，信息密度低且把这一栏撑得很高。现在与右侧两张饼图同处一行。
+  -->
+  <section class="goal-card">
+    <!-- 1. 标题行：与右侧饼图卡片标题同字号（13px / 600），视觉上是一条对齐的横线 -->
+    <div class="goal-head">
+      <span class="goal-title">🎯 年收入目标</span>
       <div class="goal-actions">
-        <button type="button" class="btn btn-primary btn-sm" @click="$emit('add')">＋ 新增目标</button>
+        <button type="button" class="btn btn-ghost btn-sm" title="新增目标" @click="$emit('add')">
+          ＋ 新增
+        </button>
         <button
           type="button"
-          class="btn btn-secondary btn-sm"
+          class="btn btn-ghost btn-sm"
           :disabled="!selectedGoal"
           @click="handleEdit"
         >编辑</button>
         <button
           type="button"
-          class="btn btn-danger btn-sm"
+          class="btn btn-ghost btn-sm"
           :disabled="!selectedGoal"
           @click="handleRemove"
         >删除</button>
       </div>
     </div>
 
-    <!-- 10. 加载态 -->
-    <div v-if="loading" class="goal-loading">加载目标...</div>
+    <!-- 加载态 -->
+    <div v-if="loading" class="goal-state">加载目标...</div>
 
     <template v-else>
-      <!-- 9. 错误态 -->
-      <div v-if="error" class="goal-error">
+      <!-- 错误态 -->
+      <div v-if="error" class="goal-state goal-error">
         <span>{{ error }}</span>
         <button type="button" class="btn btn-secondary btn-sm" @click="$emit('recalc', null)">重试</button>
       </div>
 
-      <!-- 8. 空态 -->
-      <div v-else-if="goals.length === 0" class="goal-empty">
-        还没有目标，点击「＋ 新增目标」设置你的第一个年收入目标
+      <!-- 空态 -->
+      <div v-else-if="goals.length === 0" class="goal-state goal-empty">
+        还没有目标，点「＋ 新增」设置第一个年收入目标
       </div>
 
       <div v-else-if="progress" class="goal-body">
-        <!-- 3. 进度条 -->
-        <div class="goal-progress">
-          <div class="goal-progress-track">
-            <div
-              class="goal-progress-fill"
-              :class="{ 'is-achieved': isAchieved, 'is-loading': progressLoading }"
-              :style="{ width: progressPercentWidth(progress.progress_percent) + '%' }"
-            ></div>
+        <div class="goal-main">
+          <!-- 2. 环形进度：完成度是这张卡的「主数值」，环内只放百分数，不再单开一张卡 -->
+          <div class="goal-ring" :class="{ 'is-achieved': isAchieved }">
+            <svg viewBox="0 0 100 100" aria-hidden="true">
+              <circle class="ring-track" cx="50" cy="50" r="42" />
+              <circle
+                v-if="ringPercent > 0"
+                class="ring-fill"
+                cx="50"
+                cy="50"
+                r="42"
+                :stroke-dasharray="RING_CIRCUMFERENCE"
+                :stroke-dashoffset="ringOffset"
+              />
+            </svg>
+            <span class="ring-text" :style="{ fontSize: ringFontSize }">{{ progressPercentText }}%</span>
           </div>
-          <div class="goal-progress-text" :class="{ 'is-achieved': isAchieved }">
-            <template v-if="isAchieved">✅ 已达成</template>
-            <template v-else>已完成 {{ progressPercentText }}%</template>
+
+          <div class="goal-facts">
+            <!-- 3. 目标名：多目标时是可切换下拉，单目标时退化为纯文本（对齐参考图的标题） -->
+            <div class="goal-name-row">
+              <svg class="goal-flag" viewBox="0 0 16 16" aria-hidden="true">
+                <path v-for="(d, i) in iconPaths('flag')" :key="i" :d="d" />
+              </svg>
+              <select
+                v-if="goals.length > 1"
+                id="goal-selector"
+                class="goal-name-select"
+                aria-label="选择目标"
+                :value="selectedGoalId ?? ''"
+                @change="handleSelectChange"
+              >
+                <option v-for="goal in goals" :key="goal.id" :value="goal.id">{{ goal.name }}</option>
+              </select>
+              <span v-else class="goal-name" :title="progress.goal_name">{{ progress.goal_name }}</span>
+              <span v-if="isAchieved" class="goal-badge">已达成</span>
+              <span v-if="progressLoading" class="goal-pending">更新中</span>
+            </div>
+
+            <!-- 4. 四行摘要：标签灰、数值黑粗、「月均」灰小字 -->
+            <ul class="fact-list">
+              <li class="fact">
+                <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path v-for="(d, i) in iconPaths('check')" :key="i" :d="d" />
+                </svg>
+                <span class="fact-label">当前</span>
+                <span class="fact-value">¥{{ formatAmount(progress.current_annual_income) }}</span>
+                <span class="fact-sub">月均 ¥{{ formatAmount(progress.current_monthly_income) }}</span>
+              </li>
+
+              <li class="fact">
+                <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path v-for="(d, i) in iconPaths('target')" :key="i" :d="d" />
+                </svg>
+                <span class="fact-label">目标</span>
+                <span class="fact-value">¥{{ formatAmount(progress.target_annual_income) }}</span>
+                <span class="fact-sub">月均 ¥{{ formatAmount(progress.target_monthly_income) }}</span>
+              </li>
+
+              <li v-if="!isAchieved" class="fact">
+                <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path v-for="(d, i) in iconPaths('gap')" :key="i" :d="d" />
+                </svg>
+                <span class="fact-label">缺口</span>
+                <span class="fact-value">¥{{ formatAmount(progress.gap_annual) }}</span>
+                <span class="fact-sub">月均 ¥{{ formatAmount(progress.gap_monthly) }}</span>
+              </li>
+
+              <!-- 5. 达成路径：本金与收益率两种解法压在同一行，像一句人话而不是两张卡 -->
+              <li class="fact fact-path">
+                <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path v-for="(d, i) in iconPaths('up')" :key="i" :d="d" />
+                </svg>
+                <span class="fact-text">
+                  <template v-if="isAchieved">已超出目标 <b>¥{{ formatAmount(progress.surplus_annual) }}</b>/年（月均 ¥{{ formatAmount(progress.surplus_monthly) }}）</template>
+                  <!--
+                    两句解法必须紧贴（中间不能有换行缩进，否则 Vue 会补一个空格，
+                    读成「本金， 或 整体息率」）；末尾「即可实现目标 + 图标」整体 nowrap，
+                    避免折行时只剩「可实现目标」被甩到下一行。
+                  -->
+                  <template v-else><template v-if="hasAdditionalCapital">再投入 <b>¥{{ formatAmount(progress.additional_capital) }}</b> 本金，或</template><template v-if="hasRequiredYield">整体息率达 <b>{{ formatYieldPercent(progress.required_yield_percent) }}</b> <span class="fact-tail">即可实现目标<InfoTooltip :text="CURRENT_YIELD_TOOLTIP" /></span></template><template v-else>—</template></template>
+                </span>
+              </li>
+            </ul>
           </div>
         </div>
 
-        <!-- 4. 数字网格：标签与月均金额同处首行，金额独占第二行（原三行压成两行） -->
-        <div class="goal-grid">
-          <div class="goal-item">
-            <div class="goal-item-top">
-              <span class="goal-label">当前年收入</span>
-              <span class="goal-sub">月均 ¥{{ formatAmount(progress.current_monthly_income) }}</span>
-            </div>
-            <div class="goal-value">¥{{ formatAmount(progress.current_annual_income) }}</div>
-          </div>
-          <div class="goal-item">
-            <div class="goal-item-top">
-              <span class="goal-label">目标年收入</span>
-              <span class="goal-sub">月均 ¥{{ formatAmount(progress.target_monthly_income) }}</span>
-            </div>
-            <div class="goal-value">¥{{ formatAmount(progress.target_annual_income) }}</div>
-          </div>
-          <div class="goal-item">
-            <div class="goal-item-top">
-              <span class="goal-label">缺口</span>
-              <span v-if="!isAchieved" class="goal-sub">月均 ¥{{ formatAmount(progress.gap_monthly) }}</span>
-            </div>
-            <!-- 达成时缺口无意义，只留一个「—」，不加货币符号 -->
-            <div class="goal-value">
-              <template v-if="isAchieved">—</template>
-              <template v-else>¥{{ formatAmount(progress.gap_annual) }}</template>
-            </div>
-          </div>
-          <div class="goal-item" :class="{ 'is-achieved': isAchieved }">
-            <div class="goal-item-top">
-              <span class="goal-label">完成度</span>
-            </div>
-            <div class="goal-value">{{ progressPercentText }}%</div>
-          </div>
-        </div>
-
-        <!-- 5. 达成路径 -->
-        <div v-if="isAchieved" class="goal-surplus">
-          已超出目标 ¥{{ formatAmount(progress.surplus_annual) }}/年（月均 ¥{{ formatAmount(progress.surplus_monthly) }}）
-        </div>
-        <div v-else class="goal-paths">
-          <div class="goal-path">
-            <div class="goal-path-main">
-              <div class="goal-path-label">① 收益率不变，还需再投入本金</div>
-              <div class="goal-path-value">
-                <template v-if="hasAdditionalCapital">¥{{ formatAmount(progress.additional_capital) }}</template>
-                <template v-else>—</template>
-              </div>
-            </div>
-            <!-- 给不出金额时，把 calc_note 里的原因就地说明（不再重复灰色提示行） -->
-            <div v-if="!hasAdditionalCapital && calcNote" class="goal-path-sub">{{ calcNote }}</div>
-          </div>
-          <div class="goal-path">
-            <div class="goal-path-main">
-              <div class="goal-path-label">
-                ② 本金不变，TTM 收益率需达到
-                <InfoTooltip :text="CURRENT_YIELD_TOOLTIP" />
-              </div>
-              <div class="goal-path-value">{{ formatYieldPercent(progress.required_yield_percent) }}</div>
-            </div>
-            <div v-if="hasYieldComparison" class="goal-path-sub">
-              <template v-if="yieldGapPoints > 0">
-                当前 {{ formatYieldPercent(progress.current_yield_percent) }}，还需提升 {{ yieldGapPoints.toFixed(2) }} 个百分点
-              </template>
-              <template v-else>当前已不低于该水平</template>
-            </div>
-          </div>
-        </div>
-
-        <!-- 6. 假设收益率输入：标签 / 输入框 / 提示同处一行，窄屏才换行 -->
+        <!-- 6. 假设加仓收益率：驱动「再投入本金」这一项，收成卡片底部一行 -->
         <div class="goal-assumed">
-          <div class="goal-assumed-label">
+          <span class="goal-assumed-label">
             假设加仓收益率
             <InfoTooltip :text="ASSUMED_YIELD_TOOLTIP" />
-          </div>
-          <div class="goal-assumed-input" :class="{ 'has-error': !!assumedError }">
+          </span>
+          <span class="goal-assumed-input" :class="{ 'has-error': !!assumedError }">
             <input
               id="goal-assumed-yield"
               :value="assumedYieldInput"
@@ -148,23 +146,23 @@
               max="100"
               inputmode="decimal"
               aria-label="假设加仓收益率"
-              placeholder="默认按加权 TTM"
+              placeholder="默认"
               @input="handleAssumedYieldInput"
             />
             <span class="goal-assumed-suffix">%</span>
-          </div>
-          <div v-if="assumedError" class="goal-assumed-error">{{ assumedError }}</div>
-          <div v-else class="goal-assumed-hint">默认取当前组合的加权平均 TTM 收益率</div>
+          </span>
+          <span v-if="assumedError" class="goal-assumed-error">{{ assumedError }}</span>
+          <span v-else class="goal-assumed-hint">留空 = 加权 TTM</span>
         </div>
 
         <!-- 7. 提示区 -->
         <div v-if="progress.has_mock_price" class="goal-notice goal-notice-warning">
-          当前组合含模拟价格（网络拉取失败兜底），目标进度仅供参考
+          含模拟价格，进度仅供参考
         </div>
         <div v-if="showCalcNote" class="goal-notice">{{ calcNote }}</div>
       </div>
 
-      <div v-else class="goal-loading">加载目标进度...</div>
+      <div v-else class="goal-state">加载目标进度...</div>
     </template>
   </section>
 </template>
@@ -209,7 +207,27 @@ const ASSUMED_YIELD_TOOLTIP =
   '默认取当前组合的加权平均 TTM 收益率；改这里可以按你打算买入标的的收益率重算所需本金'
 // D3/D14：同屏的「当前收益率」与「加权 TTM 收益率」口径不同，必须解释清楚，避免用户以为算错了
 const CURRENT_YIELD_TOOLTIP =
-  '「当前收益率」= 当前年收入 ÷ 当前持仓市值 × 100；与概览卡里按市值加权的「加权平均 TTM 收益率」口径不同，两者数值可能不一致。加权 TTM 只作为「假设加仓收益率」的默认值来源，不参与进度与缺口计算。'
+  '「整体息率」= 目标年收入 ÷ 当前持仓市值 × 100；与概览卡里按市值加权的「加权平均 TTM 收益率」口径不同，两者数值可能不一致。加权 TTM 只作为「假设加仓收益率」的默认值来源，不参与进度与缺口计算。'
+
+/**
+ * 行内图标（16×16 线性图标，统一 1.4 描边）。
+ * 用 path 数组而不是内联四段 svg，模板里只留一行 v-for，
+ * 四行的图标风格才会完全一致（线宽、圆心、半径）。
+ */
+const ICONS = {
+  check: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M5.1 8.2l2.1 2.1 3.8-4.4'],
+  target: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M8 5.3a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4z'],
+  gap: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M5.2 8h5.6'],
+  up: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M8 11.2V5.1', 'M5.7 7.4L8 5.1l2.3 2.3'],
+  flag: ['M3.9 1.7v12.6', 'M3.9 2.5h7.8l-1.7 2.8 1.7 2.8H3.9']
+}
+
+function iconPaths(name) {
+  return ICONS[name] || []
+}
+
+// 环的几何：r=42、stroke-width=10 → 直径 94，留 3px 防描边被 viewBox 裁掉
+const RING_CIRCUMFERENCE = 2 * Math.PI * 42
 
 const selectedGoal = computed(
   () => props.goals.find((g) => String(g.id) === String(props.selectedGoalId)) || null
@@ -222,8 +240,28 @@ const progressPercentText = computed(() => {
   return Number.isFinite(v) ? v.toFixed(2) : '0.00'
 })
 
+/** 环的填充比例：超额封顶 100%，环画不出更长（数字仍显示原值） */
+const ringPercent = computed(() => progressPercentWidth(props.progress?.progress_percent))
+
+const ringOffset = computed(
+  () => RING_CIRCUMFERENCE * (1 - Math.min(100, Math.max(0, ringPercent.value)) / 100)
+)
+
+/** 环内文字长度不定（4.10% / 126.60%）：按字符数缩字号，避免撑出环外 */
+const ringFontSize = computed(() => {
+  const len = progressPercentText.value.length + 1
+  if (len <= 5) return '19px'
+  if (len <= 6) return '16px'
+  return '13px'
+})
+
 const hasAdditionalCapital = computed(() => {
   const v = props.progress?.additional_capital
+  return v !== null && v !== undefined && Number.isFinite(Number(v))
+})
+
+const hasRequiredYield = computed(() => {
+  const v = props.progress?.required_yield_percent
   return v !== null && v !== undefined && Number.isFinite(Number(v))
 })
 
@@ -232,25 +270,8 @@ const calcNote = computed(() => {
   return typeof v === 'string' ? v.trim() : ''
 })
 
-// 路径 ① 已在正文里把 calc_note 当作「为什么给不出金额」的原因展示时，
-// 底部不再重复一整行灰色提示（spec §7.4 第 7 条）
-const showCalcNote = computed(() => {
-  if (!calcNote.value) return false
-  const usedInPath1 = !isAchieved.value && !hasAdditionalCapital.value
-  return !usedInPath1
-})
-
-const yieldGapPoints = computed(() => {
-  const v = Number(props.progress?.yield_gap_points)
-  return Number.isFinite(v) ? v : 0
-})
-
-const hasYieldComparison = computed(() => {
-  const p = props.progress
-  if (!p) return false
-  const nums = [p.required_yield_percent, p.current_yield_percent, p.yield_gap_points]
-  return nums.every((v) => v !== null && v !== undefined && Number.isFinite(Number(v)))
-})
+// 达成路径不再内嵌 calc_note（它已压成一行短句），原因单独一行灰字展示
+const showCalcNote = computed(() => !!calcNote.value && !isAchieved.value)
 
 function handleSelectChange(event) {
   const raw = event.target.value
@@ -351,42 +372,36 @@ onBeforeUnmount(clearAssumedTimer)
 
 <style scoped>
 /*
-  紧凑布局说明：
-  这个卡片原来纵向要 508px（标题 40 + 下拉 50 + 进度 30 + 数字卡 100 + 路径卡 78 +
-  假设收益率 70 + 各段 16px 间距 + 20px 内边距），把资产列表顶到了 1260px，
-  一屏（约 760px）里完全看不到。现在按「能并排就并排、能同行就同行」压到约 330px：
-    - 目标下拉并到标题行
-    - 数字卡的「月均 X」移到标签行右侧，卡片由三行变两行
-    - 达成路径的标签与金额同行
-    - 假设收益率的提示文字移到输入框右侧，不再独占一行
-  信息一个没少，只是不再各占一行。
+  与右侧两张饼图卡片同处一行，宽度只有原来的 1/3：
+  所以外框、字号、间距一律按「窄卡」设计，且卡片自身撑满行高
+  （height:100%），三张卡的上/下边缘才会齐平。
 */
-.goal-section {
+.goal-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  padding: 12px 14px;
   background: var(--card-bg);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 16px;
-  margin-bottom: 16px;
+  /* 供下方容器查询用：卡片被拉宽到整行时才把摘要行切成两列 */
+  container-type: inline-size;
+  container-name: goalcard;
 }
 
-.goal-header {
+/* ---------- 标题行 ---------- */
+.goal-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.goal-head-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 .goal-title {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -394,227 +409,287 @@ onBeforeUnmount(clearAssumedTimer)
 
 .goal-actions {
   display: flex;
-  gap: 8px;
+  gap: 2px;
+}
+
+/* 标题行里的按钮比 btn-sm 再小一号：4 个元素要塞进 1/3 栏宽 */
+.goal-actions .btn {
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
 }
 
 .goal-actions .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-/* 目标下拉：内联在标题旁，尺寸收到与 btn-sm 相当的高度 */
-.goal-selector {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
+/* ---------- 状态区 ---------- */
+.goal-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 8px;
+  text-align: center;
   font-size: 13px;
-  background: var(--card-bg);
-  color: var(--text-primary);
-  cursor: pointer;
-  min-width: 120px;
-  max-width: 200px;
-}
-
-.goal-selector:disabled {
-  cursor: not-allowed;
   color: var(--text-secondary);
 }
 
-.goal-selector:focus {
+.goal-error {
+  color: var(--danger-color);
+}
+
+.goal-empty {
+  line-height: 1.7;
+}
+
+/* ---------- 主体 ---------- */
+.goal-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.goal-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* 环形进度 */
+.goal-ring {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100px;
+  height: 100px;
+}
+
+.goal-ring svg {
+  width: 100%;
+  height: 100%;
+  /* 进度从 12 点方向开始 */
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: #eef2f7;
+  stroke-width: 10;
+}
+
+.ring-fill {
+  fill: none;
+  stroke: var(--primary-color);
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+
+/* 达成绿：与红涨绿跌的「盈亏」语义无关，仅表示「目标已达成」 */
+.goal-ring.is-achieved .ring-fill {
+  stroke: #059669;
+}
+
+.ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.goal-ring.is-achieved .ring-text {
+  color: #059669;
+}
+
+/* 右侧文字列 */
+.goal-facts {
+  flex: 1;
+  min-width: 0;
+}
+
+.goal-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.goal-flag {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.goal-name {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 多目标时才出现的下拉：做成「看起来像标题、点开是列表」的样式 */
+.goal-name-select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.goal-name-select:hover {
+  border-color: var(--border-color);
+}
+
+.goal-name-select:focus {
   outline: none;
   border-color: var(--primary-color);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-/* 状态区 */
-.goal-loading {
-  padding: 12px;
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.goal-empty {
-  padding: 20px;
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.goal-error {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 12px;
-  color: var(--danger-color);
-}
-
-/* 进度条：高度与上下间距一起收 */
-.goal-progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.goal-progress-track {
-  flex: 1;
-  height: 8px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.goal-progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--primary-color), var(--primary-light));
-  transition: width 0.3s ease;
-}
-
-/* 达成绿：与红涨绿跌的「盈亏」语义无关，仅表示「目标已达成」 */
-.goal-progress-fill.is-achieved {
-  background: linear-gradient(90deg, #059669, #34d399);
-}
-
-.goal-progress-fill.is-loading {
-  opacity: 0.6;
-}
-
-.goal-progress-text {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.goal-progress-text.is-achieved {
+.goal-badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(5, 150, 105, 0.12);
   color: #059669;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
 }
 
-/* 数字网格 */
-.goal-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
+.goal-pending {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
-.goal-item {
-  padding: 10px 12px;
-  background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
-  border-radius: var(--radius);
-  color: white;
-  container-type: inline-size;
-}
-
-.goal-item.is-achieved {
-  background: linear-gradient(135deg, #059669, #34d399);
-}
-
-/* 标签与副文案（月均）同行：左标签、右月均，第二行留给金额 */
-.goal-item-top {
+/* ---------- 四行摘要 ---------- */
+.fact-list {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   min-width: 0;
 }
 
-.goal-label {
+.fact {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fact-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fact-label {
+  flex: 0 0 auto;
   font-size: 12px;
-  opacity: 0.9;
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
-/* 与 .overview-item .value 同思路：按卡片宽度缩放，金额不折行 */
-.goal-value {
-  font-size: clamp(14px, 7cqw, 20px);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  line-height: 1.3;
+.fact-value {
+  min-width: 0;
   font-weight: 700;
-  margin-top: 2px;
-}
-
-.goal-sub {
-  font-size: 11px;
-  opacity: 0.8;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 达成路径 */
-.goal-paths {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.goal-path {
-  padding: 10px 12px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-}
-
-/* 标签与金额同行：标签在左（可能带 tooltip 图标），金额靠右对齐数字 */
-.goal-path-main {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.goal-path-label {
-  display: flex;
-  align-items: center;
+.fact-sub {
+  flex: 0 0 auto;
   font-size: 12px;
   color: var(--text-secondary);
-  min-width: 0;
-}
-
-.goal-path-value {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--primary-color);
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.goal-path-sub {
-  font-size: 11px;
+.fact-path {
+  align-items: flex-start;
+}
+
+/* 路径行图标与首行文字基线对齐：图标比 13px 文字略高，下移 1px 才不会顶在上面 */
+.fact-path .fact-icon {
+  margin-top: 2px;
+}
+
+.fact-text {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.55;
   color: var(--text-secondary);
-  margin-top: 3px;
 }
 
-.goal-surplus {
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  border-radius: var(--radius);
-  background: rgba(5, 150, 105, 0.1);
-  border: 1px solid rgba(5, 150, 105, 0.3);
-  color: #059669;
+.fact-text b {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 
-/* 假设加仓收益率：标签 / 输入框 / 说明同一行，窄屏自动换行 */
+/* 句尾「即可实现目标 ⓘ」不可拆开折行，否则图标会跟着半句话单独掉到下一行 */
+.fact-tail {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* ---------- 底部：假设加仓收益率 ---------- */
 .goal-assumed {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px 10px;
+  gap: 4px 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 12px;
 }
 
 .goal-assumed-label {
   display: flex;
   align-items: center;
-  font-size: 12px;
-  font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -623,9 +698,9 @@ onBeforeUnmount(clearAssumedTimer)
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius);
+  border-radius: 5px;
   background: var(--card-bg);
-  padding: 0 8px 0 0;
+  padding-right: 5px;
 }
 
 .goal-assumed-input.has-error {
@@ -633,10 +708,12 @@ onBeforeUnmount(clearAssumedTimer)
 }
 
 .goal-assumed-input input {
-  width: 80px;
-  padding: 3px 8px;
+  width: 56px;
+  padding: 1px 4px;
   border: none;
-  font-size: 13px;
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   background: transparent;
   color: var(--text-primary);
 }
@@ -647,32 +724,61 @@ onBeforeUnmount(clearAssumedTimer)
 
 .goal-assumed-suffix {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .goal-assumed-hint {
-  font-size: 11px;
   color: var(--text-secondary);
+  opacity: 0.85;
 }
 
 .goal-assumed-error {
-  font-size: 11px;
   color: var(--danger-color);
 }
 
-/* 提示区 */
+/* ---------- 提示区 ---------- */
 .goal-notice {
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  background: var(--bg-color);
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--text-secondary);
-  font-size: 12px;
-  margin-top: 8px;
 }
 
 .goal-notice-warning {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
   color: #b45309;
+}
+
+/*
+  卡片被拉成整行宽（900~1280 断点下独占一行，约 1040px）时，
+  四行摘要还挤在左侧 500px 里会留出一大片空白 —— 改成两列：
+  当前 / 目标 并排，缺口与达成路径合占一行。
+  用容器查询而不是媒体查询：判断依据是**卡片自身宽度**，
+  三列布局下这张卡只有 500px，不该切两列。
+*/
+@container goalcard (min-width: 700px) {
+  .fact-list {
+    display: grid;
+    /* auto auto 而不是 1fr 1fr：列宽跟着内容走，否则「当前」和「目标」会被
+       撑到卡片两头，中间空出一大段。 */
+    grid-template-columns: auto auto;
+    justify-content: start;
+    column-gap: 32px;
+  }
+}
+
+/*
+  本卡片在最左侧，两个 tooltip 图标离屏幕左边只有 100px 出头：
+  全局样式里的「以图标为中心左右各伸一半」会把浮层推出视口，
+  这里改成与图标左对齐向右展开。
+*/
+.goal-assumed-label :deep(.tooltip-content),
+.fact-text :deep(.tooltip-content) {
+  left: 0;
+  transform: none;
+}
+
+.goal-assumed-label :deep(.tooltip-content::after),
+.fact-text :deep(.tooltip-content::after) {
+  left: 12px;
+  transform: none;
 }
 </style>

@@ -466,7 +466,15 @@ body {
   color: white;
   font-size: 12px;
   border-radius: 4px;
-  white-space: nowrap;
+  /*
+    不能 nowrap：口径说明这类长文案有一百多字，nowrap 会让浮层宽到 1100px+，
+    从图标位置往两边撑，左边直接跑到视口外。
+    短文案靠 width:max-content 仍是单行，长文案在 260px 处折行。
+  */
+  width: max-content;
+  max-width: 260px;
+  white-space: normal;
+  line-height: 1.6;
   z-index: 100;
   opacity: 0;
   visibility: hidden;
