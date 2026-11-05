@@ -32,6 +32,154 @@
         页面每 30 秒自动刷新一次。
       </div>
 
+      <!-- SQLite 体积与备份：独立于任务列表，任务接口挂了也能备份 -->
+      <section v-if="dbInfo" class="card admin-db">
+        <div class="card-header">
+          <div class="card-title">
+            SQLite 数据库
+            <span class="admin-key">{{ dbInfo.file_name || '未配置' }}</span>
+            <span v-if="!dbInfo.supported || !dbInfo.exists" class="admin-badge off">
+              {{ dbInfo.supported ? '文件缺失' : '非 SQLite' }}
+            </span>
+          </div>
+          <div class="card-actions">
+            <span class="db-size" :title="dbInfo.path">{{ formatBytes(dbInfo.size_bytes) }}</span>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="backingUp || !dbInfo.exists"
+              @click="handleBackup"
+            >
+              <span v-if="backingUp" class="admin-spinner"></span>
+              {{ backingUp ? '备份中...' : '⤓ 立即备份' }}
+            </button>
+          </div>
+        </div>
+
+        <p class="admin-desc">
+          备份走 SQLite 官方的在线备份 API（逐页复制、遇写锁重试），后台任务正在写入也能拿到
+          <b>事务一致</b>的快照，不是简单拷文件。备份落在
+          <code :title="dbInfo.backup_dir">{{ backupDirLabel }}</code>，不会自动清理 —— 删哪份由你决定。
+        </p>
+
+        <div class="admin-meta db-meta">
+          <div class="admin-meta-item strong">
+            <span class="k">文件大小</span>
+            <span class="v">
+              {{ formatBytes(dbInfo.size_bytes) }}
+              <span class="admin-sub" :title="dbInfo.path">
+                {{ dbInfo.tables.length }} 张表 · {{ dbInfo.page_count }} 页
+              </span>
+            </span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">可回收</span>
+            <span class="v">
+              {{ formatBytes(dbInfo.reclaimable_bytes) }}
+              <span class="admin-sub">
+                {{ dbInfo.reclaimable_bytes > 0 ? '空闲页，VACUUM 可释放' : '没有空闲页' }}
+              </span>
+            </span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">日志模式</span>
+            <span class="v">
+              {{ dbInfo.journal_mode || '—' }}
+              <span class="admin-sub">
+                {{ dbInfo.wal_size_bytes > 0 ? `WAL ${formatBytes(dbInfo.wal_size_bytes)}` : '无 WAL 文件' }}
+              </span>
+            </span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">备份</span>
+            <span class="v">
+              {{ dbInfo.backup_count }} 份
+              <span class="admin-sub">共 {{ formatBytes(dbInfo.backup_size_bytes) }}</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- 按表占用：默认收起，避免把任务卡片挤到屏幕外 -->
+        <details v-if="dbInfo.tables.length" class="db-tables">
+          <summary>按表占用（{{ dbInfo.tables.length }} 张表）</summary>
+          <div class="table-container">
+            <table class="data-table admin-table">
+              <thead>
+                <tr>
+                  <th>表</th>
+                  <th class="text-right">行数</th>
+                  <th class="text-right">占用</th>
+                  <th class="text-right">占总大小</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in dbInfo.tables" :key="row.name">
+                  <td class="db-table-name">{{ row.name }}</td>
+                  <td class="text-right">{{ row.rows.toLocaleString('zh-CN') }}</td>
+                  <td class="text-right">{{ formatBytes(row.size_bytes) }}</td>
+                  <td class="text-right admin-sub">{{ shareText(row.size_bytes) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+        <div v-else-if="dbInfo.exists && !dbInfo.tables_supported" class="admin-hint-note">
+          当前 SQLite 构建未启用 <code>dbstat</code>，无法按表统计占用（总大小不受影响）。
+        </div>
+
+        <div class="admin-history">
+          <div class="admin-history-head">
+            <span class="admin-history-title">备份</span>
+            <span class="admin-history-count">
+              {{ backups.length ? `共 ${backups.length} 份，新的在前` : '' }}
+            </span>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              :disabled="loadingDb"
+              @click="loadDatabase"
+            >刷新</button>
+          </div>
+
+          <div v-if="dbError" class="admin-hint-error">{{ dbError }}</div>
+          <div v-else-if="!backups.length" class="empty-hint">
+            还没有备份 —— 点右上角「立即备份」生成一份（就是当前库的完整快照）
+          </div>
+          <div v-else class="table-container db-backup-list">
+            <table class="data-table admin-table">
+              <thead>
+                <tr>
+                  <th>文件</th>
+                  <th class="text-right">大小</th>
+                  <th>生成时间</th>
+                  <th class="text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in backups" :key="row.name">
+                  <td class="db-file-name" :title="row.name">{{ row.name }}</td>
+                  <td class="text-right">{{ formatBytes(row.size_bytes) }}</td>
+                  <td class="admin-nowrap">{{ formatDateTime(row.created_at) }}</td>
+                  <td class="text-right db-actions">
+                    <a
+                      class="btn btn-ghost btn-sm"
+                      :href="backupDownloadUrl(row.name)"
+                      :download="row.name"
+                    >下载</a>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-sm db-danger"
+                      :disabled="deletingName === row.name"
+                      @click="handleDeleteBackup(row)"
+                    >{{ deletingName === row.name ? '删除中…' : '删除' }}</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <div v-if="error" class="admin-error">
         <span>{{ error }}</span>
         <button type="button" class="btn btn-secondary btn-sm" @click="loadAll">重试</button>
@@ -179,8 +327,18 @@
  */
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from 'vue'
 
-import { getJobRuns, getJobs, runJobNow } from '../api/admin.js'
+import {
+  backupDownloadUrl,
+  createBackup,
+  deleteBackup,
+  getBackups,
+  getDatabaseInfo,
+  getJobRuns,
+  getJobs,
+  runJobNow,
+} from '../api/admin.js'
 import { toast } from '../composables/useToast.js'
+import { formatBytes } from '../utils/format.js'
 import {
   formatDateTime,
   formatDuration,
@@ -201,6 +359,14 @@ const error = ref('')
 const runningKey = ref('')
 const history = reactive({})
 const historyTotal = reactive({})
+
+// 数据库卡片是**独立**的一块状态：任务接口挂了它照样能用，反之亦然
+const dbInfo = ref(null)
+const backups = ref([])
+const loadingDb = ref(false)
+const backingUp = ref(false)
+const deletingName = ref('')
+const dbError = ref('')
 
 let timer = null
 
@@ -274,9 +440,73 @@ async function handleRun(job) {
   }
 }
 
+// ---------- 数据库：体积与备份 ----------
+
+/** 备份目录只显示最后两级（portfolio_api/backups），完整路径放 title，否则长路径会把描述撑断行 */
+const backupDirLabel = computed(() => {
+  const raw = (dbInfo.value && dbInfo.value.backup_dir) || ''
+  if (!raw) return 'backups'
+  return raw.split('/').filter(Boolean).slice(-2).join('/')
+})
+
+/** 单表占用占总大小的比例。总大小为 0 时给「—」，不做 0/0。 */
+function shareText(sizeBytes) {
+  const total = Number(dbInfo.value && dbInfo.value.size_bytes) || 0
+  if (!total) return '—'
+  return `${((Number(sizeBytes) / total) * 100).toFixed(1)}%`
+}
+
+async function loadDatabase({ quiet = false } = {}) {
+  if (!quiet) loadingDb.value = true
+  try {
+    // 概况与列表一起取：概况里的 backup_count / latest_backup 也来自列表
+    const [info, list] = await Promise.all([getDatabaseInfo(), getBackups()])
+    dbInfo.value = info
+    backups.value = Array.isArray(list.items) ? list.items : []
+    dbError.value = ''
+  } catch (e) {
+    // 数据库卡片失败只在自己这一块提示，不接管整页的 error
+    console.error('加载数据库信息失败:', e)
+    dbError.value = e.message || '数据库信息加载失败'
+    if (!dbInfo.value) dbInfo.value = null
+  } finally {
+    loadingDb.value = false
+  }
+}
+
+async function handleBackup() {
+  backingUp.value = true
+  try {
+    const info = await createBackup()
+    toast.success(`备份完成：${info.name}（${formatBytes(info.size_bytes)}）`)
+    await loadDatabase({ quiet: true })
+  } catch (e) {
+    toast.error(e.message || '备份失败，请稍后重试')
+  } finally {
+    backingUp.value = false
+  }
+}
+
+async function handleDeleteBackup(row) {
+  if (!confirm(`确定删除备份「${row.name}」吗？删除后无法恢复。`)) return
+  deletingName.value = row.name
+  try {
+    await deleteBackup(row.name)
+    toast.success(`已删除 ${row.name}`)
+    await loadDatabase({ quiet: true })
+  } catch (e) {
+    toast.error(e.message || '删除失败，请稍后重试')
+  } finally {
+    deletingName.value = ''
+  }
+}
+
 function startPolling() {
   stopPolling()
-  timer = setInterval(() => loadAll({ quiet: true }), POLL_INTERVAL_MS)
+  timer = setInterval(() => {
+    loadAll({ quiet: true })
+    loadDatabase({ quiet: true })
+  }, POLL_INTERVAL_MS)
 }
 
 function stopPolling() {
@@ -286,10 +516,14 @@ function stopPolling() {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  loadAll()
+  loadDatabase()
+})
 onActivated(() => {
   // 首次挂载时 onActivated 也会触发，避免重复请求
   if (jobs.value.length > 0) loadAll({ quiet: true })
+  if (dbInfo.value) loadDatabase({ quiet: true })
   startPolling()
 })
 onDeactivated(stopPolling)
@@ -511,4 +745,112 @@ onUnmounted(stopPolling)
     transform: rotate(360deg);
   }
 }
+/* ---------- SQLite 数据库卡片 ---------- */
+.admin-db {
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* 空间大小是这张卡最重要的数字，放大到与「最近运行」同级 */
+.db-size {
+  margin-right: 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  4 项元信息。必须自己写媒体查询：.db-meta 与 .admin-meta 特异性相同、
+  又排在文件后面，会把 .admin-meta 的 980/620 断点覆盖掉。
+*/
+.db-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .db-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .db-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+.db-tables {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: #fcfdff;
+}
+
+.db-tables > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.db-tables > summary:hover {
+  color: var(--primary-color);
+}
+
+.db-tables[open] > summary {
+  margin-bottom: 8px;
+}
+
+.db-table-name,
+.db-file-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.db-file-name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 备份会越攒越多，列表限高滚动，不让卡片无限变长 */
+.db-backup-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.db-actions {
+  white-space: nowrap;
+}
+
+.db-actions .btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.db-actions .btn + .btn {
+  margin-left: 6px;
+}
+
+.db-danger:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.admin-hint-note {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 </style>

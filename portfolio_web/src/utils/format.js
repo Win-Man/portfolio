@@ -112,3 +112,27 @@ export function formatSigned(n, fmt = formatAmount) {
   const v = Number(n) || 0
   return (v >= 0 ? '+' : '−') + fmt(Math.abs(v))
 }
+
+/**
+ * 字节数 → 人读文本（KB / MB / GB / TB）。
+ *
+ * 这是本文件里**唯一**用缩写的场景：金额用完整数字是为了右对齐，
+ * 而 "5,214,208 B" 完全读不出量级，KB/MB 才是这个场景的通用语言。
+ * 1 KB 以下不带小数（"512 B"），与后端 `db_backup.human_size` 口径一致。
+ *
+ * @param {number|string|null|undefined} bytes
+ * @returns {string} 例如 "0 B" / "512 B" / "4.9 MB"
+ */
+export function formatBytes(bytes) {
+  const n = Number(bytes)
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  if (n < 1024) return `${Math.round(n)} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let size = n
+  for (let i = 0; i < units.length; i += 1) {
+    size /= 1024
+    // 最后一档（TB）即使还大于 1024 也不再往上升
+    if (size < 1024 || i === units.length - 1) return `${size.toFixed(1)} ${units[i]}`
+  }
+  return `${size.toFixed(1)} TB`
+}

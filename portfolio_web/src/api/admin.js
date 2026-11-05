@@ -48,3 +48,32 @@ export async function runJobNow(key) {
     method: 'POST',
   })
 }
+
+// ---------- SQLite 体积与备份 ----------
+
+/** 数据库概况：文件大小、页数、按表占用、备份目录概况 */
+export async function getDatabaseInfo() {
+  return await request(`${API_BASE}/api/admin/database`)
+}
+
+/** 备份列表（新的在前） */
+export async function getBackups() {
+  return await request(`${API_BASE}/api/admin/database/backups`)
+}
+
+/** 立即备份一份 */
+export async function createBackup() {
+  return await request(`${API_BASE}/api/admin/database/backups`, { method: 'POST' })
+}
+
+/** 删除一份备份 */
+export async function deleteBackup(name) {
+  return await request(`${API_BASE}/api/admin/database/backups/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+}
+
+/** 下载地址：交给 <a href> 由浏览器直接下载，不用 fetch（省内存、有原生进度） */
+export function backupDownloadUrl(name) {
+  return `${API_BASE}/api/admin/database/backups/${encodeURIComponent(name)}`
+}

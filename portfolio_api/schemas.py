@@ -515,3 +515,48 @@ class DailyReportGenerateRequest(BaseModel):
     report_type: Literal["portfolio", "watchlist"]
     # report_type=portfolio 时为必填；watchlist 忽略
     portfolio_id: Optional[int] = None
+
+
+# ---------- 后台管理：SQLite 体积与备份 ----------
+
+class TableSizeInfo(BaseModel):
+    """单张表的占用（表数据 + 它的索引合并计算）。"""
+
+    name: str
+    rows: int = 0
+    size_bytes: int = 0
+
+
+class BackupInfo(BaseModel):
+    """一份备份文件。created_at 是文件的 mtime（Asia/Shanghai 墙上时间）。"""
+
+    name: str
+    size_bytes: int = 0
+    created_at: Optional[datetime] = None
+
+
+class DatabaseInfoResponse(BaseModel):
+    supported: bool = True                  # 当前是否 sqlite（其它数据库不提供这套接口的价值）
+    path: str = ""
+    file_name: str = ""
+    exists: bool = False
+    size_bytes: int = 0
+    page_size: int = 0
+    page_count: int = 0
+    free_pages: int = 0
+    # 空闲页 × 页大小：已删除但文件还没缩回去的部分，VACUUM 可回收
+    reclaimable_bytes: int = 0
+    wal_size_bytes: int = 0
+    journal_mode: str = ""
+    tables: List[TableSizeInfo] = []
+    tables_supported: bool = True           # 构建未启用 dbstat 时为 False
+    backup_dir: str = ""
+    backup_count: int = 0
+    backup_size_bytes: int = 0
+    latest_backup: Optional[BackupInfo] = None
+
+
+class BackupListResponse(BaseModel):
+    items: List[BackupInfo] = []
+    total: int = 0
+    total_size_bytes: int = 0

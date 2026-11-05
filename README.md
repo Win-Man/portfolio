@@ -145,6 +145,29 @@ npm run preview  # 预览生产构建
 
 状态：`running` / `success` / `partial`（部分失败）/ `failed` / `skipped`（到点但没活干）。
 
+### 后台管理（数据库体积与备份）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/database` | 文件大小、页数与空闲页（可回收空间）、日志模式、**按表占用**、备份目录概况 |
+| GET | `/api/admin/database/backups` | 备份列表，新的在前（只返回本工具生成的文件） |
+| POST | `/api/admin/database/backups` | 立即备份一份（201），返回文件名 / 大小 / 时间 |
+| GET | `/api/admin/database/backups/{name}` | 下载备份（`Content-Disposition: attachment`） |
+| DELETE | `/api/admin/database/backups/{name}` | 删除备份 |
+
+两个实现要点：
+
+1. **备份用 `sqlite3.Connection.backup()`，不是 `shutil.copy`**。直接拷文件可能拿到
+   「主库已写、回滚日志未落」的中间态；在线备份 API 逐页复制、遇写锁自动重试，
+   产出事务一致的快照。备份完还会跑一次 `PRAGMA quick_check`，不通过就删掉半成品并报错。
+2. **文件名即白名单**：只认 `portfolio-YYYYMMDD-HHMMSS.db`（同秒重复加 `-1` 后缀），
+   不匹配一律 `400` —— 这同时挡住了路径穿越。
+
+不是 SQLite、或库文件缺失时 `GET /database` 仍返回 `200`（`supported` / `exists` 为 `false`），
+让前端的任务列表照常显示。备份目录由 `BACKUP_DIR` 配置（默认 `portfolio_api/backups/`），
+**不自动清理**，删哪份由用户决定；该目录已在 `.gitignore` 里。
+
+
 ### 收入日历
 
 | 方法 | 路径 | 说明 |

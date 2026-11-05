@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # ---- 数据库 ----
     # 默认用 sqlite 在 backend 根目录下；可改为 mysql/postgres URL
     database_url: str = "sqlite:///./portfolio.db"
+    # SQLite 备份目录（相对当前工作目录，即 portfolio_api/）。只对 sqlite 生效。
+    backup_dir: str = "backups"
 
     # ---- 服务 ----
     api_host: str = "0.0.0.0"

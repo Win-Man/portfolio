@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 
 import {
   formatAmount,
+  formatBytes,
   formatQuantity,
   formatCost,
   formatPrice,
@@ -137,4 +138,21 @@ test('formatPrice：无效值给「—」而不是假的 0.00', () => {
   assert.equal(formatPrice('abc', 'ETF'), '—')
   // 0 是有效价格，不该当成「无数据」
   assert.equal(formatPrice(0, '股票'), '0.00')
+})
+
+test('formatBytes：按 1024 进位，1KB 以下不带小数', () => {
+  assert.equal(formatBytes(0), '0 B')
+  assert.equal(formatBytes(512), '512 B')
+  assert.equal(formatBytes(1023), '1023 B')
+  assert.equal(formatBytes(1024), '1.0 KB')
+  assert.equal(formatBytes(1536), '1.5 KB')
+  assert.equal(formatBytes(5214208), '5.0 MB')
+  assert.equal(formatBytes(1024 ** 3), '1.0 GB')
+})
+
+test('formatBytes：无效输入给 "0 B" 而不是 NaN', () => {
+  assert.equal(formatBytes(null), '0 B')
+  assert.equal(formatBytes(undefined), '0 B')
+  assert.equal(formatBytes(-100), '0 B')
+  assert.equal(formatBytes('abc'), '0 B')
 })
