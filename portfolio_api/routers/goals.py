@@ -16,6 +16,7 @@ from database import get_db
 from models import Asset, Goal, Portfolio
 from portfolio_math import (
     expected_annual_income,
+    goal_gap,
     has_mock_price,
     total_market_value,
     weighted_ttm_yield,
@@ -154,13 +155,14 @@ def get_goal_progress(
     target_annual = goal.annual_income_target
     target_monthly = target_annual / 12
 
-    gap_annual = max(0.0, target_annual - current_annual)
-    gap_monthly = gap_annual / 12
-    # target > 0 由 schema 校验保证，无除零
-    progress_percent = current_annual / target_annual * 100
-    is_achieved = current_annual >= target_annual
-    surplus_annual = max(0.0, current_annual - target_annual)
-    surplus_monthly = surplus_annual / 12
+    # 缺口 / 完成度：与「每日日报」的目标板块共用同一份实现（portfolio_math.goal_gap）
+    brief = goal_gap(current_annual, target_annual)
+    gap_annual = brief["gap_annual"]
+    gap_monthly = brief["gap_monthly"]
+    progress_percent = brief["progress_percent"]
+    is_achieved = brief["is_achieved"]
+    surplus_annual = brief["surplus_annual"]
+    surplus_monthly = brief["surplus_monthly"]
 
     market_value = total_market_value(assets)
     portfolio_ttm = weighted_ttm_yield(assets)

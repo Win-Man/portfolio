@@ -36,6 +36,29 @@ def weighted_ttm_yield(assets) -> float:
     return 0.0
 
 
+def goal_gap(current_annual: float, target_annual: float) -> dict:
+    """目标缺口与完成度（**唯一实现**）。
+
+    `routers/goals.py` 的进度卡片与「每日日报」的目标板块都从这里取数：
+    同一条公式写在两处迟早会漂移（历史上就出现过一处拿市值当分母、
+    另一处拿目标当分母，两个页面上的完成度对不上）。
+
+    target <= 0 时（schema 已拦住，纯防御）完成度返回 0 而不是除零。
+    """
+    current = float(current_annual or 0)
+    target = float(target_annual or 0)
+    gap = max(0.0, target - current)
+    surplus = max(0.0, current - target)
+    return {
+        "gap_annual": gap,
+        "gap_monthly": gap / 12,
+        "surplus_annual": surplus,
+        "surplus_monthly": surplus / 12,
+        "progress_percent": (current / target * 100) if target > 0 else 0.0,
+        "is_achieved": target > 0 and current >= target,
+    }
+
+
 def has_mock_price(assets) -> bool:
     """是否含「模拟价格」的标的（网络拉取失败时的兜底价）。"""
     return any(

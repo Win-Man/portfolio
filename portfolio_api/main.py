@@ -12,7 +12,7 @@ from config import settings
 import net
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
-from routers import portfolios, assets, stocks, goals, calendar, watchlist, admin
+from routers import portfolios, assets, stocks, goals, calendar, watchlist, admin, reports
 from scheduler import get_job_specs, run_scheduler
 
 # 配置日志：开发期人类可读，生产可改 JSON formatter
@@ -120,6 +120,7 @@ app.include_router(goals.router)
 app.include_router(calendar.router)
 app.include_router(watchlist.router)
 app.include_router(admin.router)
+app.include_router(reports.router)
 
 
 # ---------- 种子数据 ----------

@@ -471,3 +471,47 @@ class JobRunListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------- 每日日报（spec 004） ----------
+# 日报的明细是「生成那一刻的快照」，字段会继续演进，因此详情里整块 payload
+# 用 dict 透传：Pydantic 只把住外面的列表/详情骨架，内部结构由 reports.py 定义。
+# 好处是旧报告永远能渲染（前端按缺省值兜底），不必为每次加字段改 schema。
+
+class DailyReportBrief(BaseModel):
+    """列表页一行：日期 + 今日盈亏 + 信号数，**不含 payload**。"""
+
+    id: int
+    report_type: str                  # portfolio / watchlist
+    scope_id: int                     # 组合 id；观察池恒 0
+    report_date: date
+    title: str = ""
+    total_pnl: float = 0              # 今日盈亏（元）
+    total_pnl_percent: Optional[float] = None
+    item_count: int = 0
+    signal_count: int = 0             # 观察池：达标信号数（股息率 + 目标价）
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DailyReportDetail(DailyReportBrief):
+    """详情：附带整份 payload（汇总 / 明细 / 榜单 / 提示）。"""
+
+    payload: dict = {}
+
+
+class DailyReportListResponse(BaseModel):
+    items: List[DailyReportBrief]
+    total: int
+    limit: int
+    offset: int
+
+
+class DailyReportGenerateRequest(BaseModel):
+    """手动生成（「立即生成」按钮 / 补跑）。只支持今天 —— 历史日期没有昨收可算。"""
+
+    report_type: Literal["portfolio", "watchlist"]
+    # report_type=portfolio 时为必填；watchlist 忽略
+    portfolio_id: Optional[int] = None

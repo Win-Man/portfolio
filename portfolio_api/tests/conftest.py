@@ -25,6 +25,10 @@ os.environ.setdefault("WATCHLIST_SNAPSHOT_ENABLED", "false")
 # 投资组合价格每日刷新任务：同理关闭，避免后台任务打真实行情接口。
 os.environ.setdefault("ASSET_PRICE_REFRESH_ENABLED", "false")
 
+# 两个每日日报任务：同理关闭（组合日报会拉真实行情）。
+os.environ.setdefault("DAILY_REPORT_PORTFOLIO_ENABLED", "false")
+os.environ.setdefault("DAILY_REPORT_WATCHLIST_ENABLED", "false")
+
 # 观察池历史回填：默认关闭 —— 否则「首次刷新」会去拉真实日K。
 # 需要验回填的用例自己 monkeypatch settings 打开（见 test_watchlist.py）。
 os.environ.setdefault("WATCHLIST_BACKFILL_ENABLED", "false")

@@ -132,11 +132,13 @@ npm run preview  # 预览生产构建
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/admin/jobs` | 两个任务的配置（开关 / 计划时刻 / 时区）+ **最后运行时间** + 下次预计运行 + 累计运行与状态分布 |
+| GET | `/api/admin/jobs` | 四个任务的配置（开关 / 计划时刻 / 时区）+ **最后运行时间** + 下次预计运行 + 累计运行与状态分布 |
 | GET | `/api/admin/jobs/{key}/runs?limit=20&offset=0` | 运行历史，**新的在前**（`limit` 1–100） |
 | POST | `/api/admin/jobs/{key}/run` | 立即执行一次（不受开关与时刻限制），返回本次运行记录 |
 
-`key` 只有两个：`asset_price_refresh`（价格刷新）、`watchlist_snapshot`（观察池快照）。未知 key → `404 任务不存在`。
+`key` 共四个：`asset_price_refresh`（15:05 价格刷新）、`watchlist_snapshot`（15:30 观察池快照）、
+`portfolio_daily_report`（15:40 组合日报）、`watchlist_daily_report`（15:45 观察池日报）。
+未知 key → `404 任务不存在`。
 
 时间口径：返回的是 **Asia/Shanghai 的墙上时间**（`2026-11-03T15:05:12`，不带时区后缀）——
 任务由「15:30 这种本地时刻」驱动，前端直接按本地显示，不做时区换算。

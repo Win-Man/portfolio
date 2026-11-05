@@ -1,14 +1,17 @@
 """定时任务引擎：注册表 + 每日调度循环 + 两个内置任务。
 
-## 有哪两个任务
+## 有哪四个任务
 
 | key | 干什么 | 默认时刻 |
 |---|---|---|
-| `watchlist_snapshot` | 观察池：把每只标的的「当天快照」写进 `watchlist_snapshots` | 15:30 |
 | `asset_price_refresh` | 投资组合：把所有资产的最新价刷成收盘价 | 15:05 |
+| `watchlist_snapshot` | 观察池：把每只标的的「当天快照」写进 `watchlist_snapshots` | 15:30 |
+| `portfolio_daily_report` | 给每个组合生成当天的日报（今日盈亏 + 明细 + 榜单） | 15:40 |
+| `watchlist_daily_report` | 生成观察池日报（等权盈亏 + 股息率/目标价信号） | 15:45 |
 
 时刻都在 `.env` 里改，且**收盘后再跑**：15:00 收盘，15:05 取到的是当日收盘价；
-15:30 留出一点间隔，避免两个任务同时打行情接口。
+15:30 / 15:40 / 15:45 拉开间隔，既避免同时打行情接口，也保证日报读到的是
+**刷新之后**的价格与观察池快照（顺序反了就会拿昨天的价算今天的盈亏）。
 
 ## 怎么跑
 
@@ -43,7 +46,8 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import SessionLocal
-from models import Asset, JobRun, WatchlistItem, WatchlistSnapshot
+from daily_reports import generate_portfolio_reports, generate_watchlist_report
+from models import Asset, JobRun, Portfolio, WatchlistItem, WatchlistSnapshot
 from routers.assets import fetch_real_time_price
 from routers.watchlist import _refresh_one
 
@@ -59,6 +63,8 @@ POLL_INTERVAL_SECONDS = 60
 
 DEFAULT_WATCHLIST_TIME = "15:30"
 DEFAULT_ASSET_PRICE_TIME = "15:05"
+DEFAULT_PORTFOLIO_REPORT_TIME = "15:40"
+DEFAULT_WATCHLIST_REPORT_TIME = "15:45"
 
 # (job_key, 日期) -> 今天已尝试轮数。模块级，避免外部源挂掉时每分钟重试。
 _attempt_state: Dict[tuple, int] = {}
@@ -259,6 +265,65 @@ async def run_asset_price_refresh(db: Session) -> JobResult:
     return result
 
 
+# ========== 任务 3 / 4：每日日报 ==========
+
+async def run_portfolio_daily_report(db: Session) -> JobResult:
+    """给每个组合生成当天日报。
+
+    逐个组合跑并各自兜异常：某个组合的行情拉挂了，不该让其它组合也没有日报。
+    同一天重复执行是安全的 —— 日报按 (类型, 范围, 日期) UPSERT，
+    重跑只会用更新的价格覆盖当天那一份。
+    """
+    today = now_local().date()
+    portfolios = db.query(Portfolio).order_by(Portfolio.id.asc()).all()
+    result = JobResult(total=len(portfolios))
+    if not portfolios:
+        result.message = "没有任何组合，跳过"
+        return result
+
+    for portfolio in portfolios:
+        try:
+            rows = await generate_portfolio_reports(db, portfolio_id=portfolio.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:                 # 单个组合失败不能拖垮整批
+            logger.exception("daily report job: portfolio=%s failed", portfolio.id)
+            db.rollback()
+            result.failed += 1
+            result.errors.append(f"{portfolio.name}: {type(exc).__name__} {exc}")
+            continue
+        result.succeeded += len(rows)
+
+    result.message = f"{today} 组合日报 {result.succeeded}/{result.total} 成功"
+    return result
+
+
+async def run_watchlist_daily_report(db: Session) -> JobResult:
+    """生成观察池日报（全局一份）。
+
+    观察池为空也照常生成一份空快照：后台管理页上「今天跑过」这件事本身有信息量，
+    比因为没有标的就什么都不留下更容易排查。
+    """
+    today = now_local().date()
+    result = JobResult(total=1)
+    try:
+        rows = await generate_watchlist_report(db)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("daily report job: watchlist failed")
+        db.rollback()
+        result.failed = 1
+        result.errors.append(f"{type(exc).__name__} {exc}")
+        result.message = "观察池日报生成失败"
+        return result
+
+    result.succeeded = 1 if rows is not None else 0
+    count = (rows.item_count if rows is not None else 0)
+    result.message = f"{today} 观察池日报已生成（{count} 只标的）"
+    return result
+
+
 # ========== 注册表 ==========
 
 def get_job_specs() -> Dict[str, JobSpec]:
@@ -287,6 +352,30 @@ def get_job_specs() -> Dict[str, JobSpec]:
             time_attr="watchlist_snapshot_time",
             default_time=DEFAULT_WATCHLIST_TIME,
             runner=run_watchlist_snapshot,
+        ),
+        JobSpec(
+            key="portfolio_daily_report",
+            name="投资组合日报",
+            description=(
+                "给每个组合生成当天日报：今日盈亏、盈亏明细、涨跌榜、收入结构与目标进度。"
+                "排在价格刷新之后，读到的是当日收盘价；同一天重跑只覆盖当天那一份。"
+            ),
+            enabled_attr="daily_report_portfolio_enabled",
+            time_attr="daily_report_portfolio_time",
+            default_time=DEFAULT_PORTFOLIO_REPORT_TIME,
+            runner=run_portfolio_daily_report,
+        ),
+        JobSpec(
+            key="watchlist_daily_report",
+            name="观察池日报",
+            description=(
+                "生成观察池日报：等权今日盈亏、逐只涨跌明细、股息率与目标价的达标信号。"
+                "只读库里的快照，不发外部请求。"
+            ),
+            enabled_attr="daily_report_watchlist_enabled",
+            time_attr="daily_report_watchlist_time",
+            default_time=DEFAULT_WATCHLIST_REPORT_TIME,
+            runner=run_watchlist_daily_report,
         ),
     )
     return {spec.key: spec for spec in specs}

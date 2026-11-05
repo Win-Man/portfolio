@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     # 15:00 收盘 → 15:05 取到的是收盘价；比观察池快照早 25 分钟，避免同时打接口
     asset_price_refresh_time: str = "15:05"
 
+    # ---- 每日日报（spec 004）----
+    # 两份日报各一个定时任务，排在「价格刷新 15:05」「观察池快照 15:30」之后：
+    # 日报要读的正是这两个任务刚刚写好的收盘价。
+    # 测试环境必须设为 false（否则会起后台任务并发真实行情请求）。
+    daily_report_portfolio_enabled: bool = True
+    daily_report_portfolio_time: str = "15:40"
+    daily_report_watchlist_enabled: bool = True
+    daily_report_watchlist_time: str = "15:45"
+    # 观察池没有真实持股数，「今日盈亏」按等权测算：假设每只标的投这么多钱。
+    # 只是测算基准，不改任何库里的数据。
+    daily_report_watchlist_notional: float = 10000.0
+
     # ---- 观察池历史回填 ----
     # 新加入的标的首次刷新时，用真实日K + 历史分红补一段快照，走势图才有历史可看。
     # 测试环境必须设为 false（否则首次刷新会发真实日K请求）。

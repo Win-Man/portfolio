@@ -199,3 +199,45 @@ class JobRun(Base):
     message = Column(String, default="")                   # 一句话结论，直接展示
     errors = Column(Text, default="")                      # JSON 数组文本，逐条失败原因
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DailyReport(Base):
+    """每日日报（投资组合 / 观察池），生成即落库，历史可回看。
+
+    一份报告 = (类型, 范围, 日期) 唯一。同一天重复生成走「先查后写」的 UPSERT，
+    不会攒出好几份「今天的日报」；重跑也能让当天数据变新（收盘重算）。
+
+    `payload` 存整份报告的 JSON：明细数组 + 各分块 + 数据质量提示。
+    **为什么用 JSON 而不是明细子表**：日报是生成那一刻的**只读快照**，
+    展示字段还会继续演进（今天加股息率、明天加集中度）；存 JSON 才能让
+    旧报告永远保持它生成时的样子，拆成表则每次加字段都得迁移历史数据。
+
+    其余列都是从 payload 里提出来的**冗余字段**，只服务列表页：
+    列表只需要「日期 / 今日盈亏 / 信号数」，不该为了 30 行列表去解析
+    30 份几十 KB 的 JSON。
+    """
+
+    __tablename__ = "daily_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_type", "scope_id", "report_date", name="uq_daily_report_scope_date"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    # portfolio / watchlist（白名单见 reports.REPORT_TYPES）
+    report_type = Column(String, nullable=False, index=True)
+    # 组合 id；观察池是全局的，恒 0（配合上面的唯一约束，一天只有一份）
+    scope_id = Column(Integer, nullable=False, default=0, index=True)
+    report_date = Column(Date, nullable=False, index=True)   # Asia/Shanghai 的当天
+    title = Column(String, nullable=False, default="")
+    payload = Column(Text, nullable=False, default="{}")
+
+    # 列表页冗余汇总（生成时定格，不随后续行情变化）
+    total_pnl = Column(Float, default=0)          # 今日盈亏（元）
+    total_pnl_percent = Column(Float, nullable=True)   # 今日涨跌幅（%）
+    item_count = Column(Integer, default=0)       # 标的数
+    signal_count = Column(Integer, default=0)     # 观察池：达标信号数
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

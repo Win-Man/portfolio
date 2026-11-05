@@ -18,6 +18,11 @@
           :class="{ active: isWatchlistTab }"
         >观察池</router-link>
         <router-link
+          to="/reports"
+          class="app-tab"
+          :class="{ active: isReportsTab }"
+        >日报</router-link>
+        <router-link
           to="/admin"
           class="app-tab"
           :class="{ active: isAdminTab }"
@@ -117,6 +122,7 @@ const route = useRoute()
 const isPortfolioTab = computed(() => route.name === 'portfolio')
 const isCalendarTab = computed(() => route.name === 'calendar')
 const isWatchlistTab = computed(() => route.name === 'watchlist')
+const isReportsTab = computed(() => route.name === 'reports')
 const isAdminTab = computed(() => route.name === 'admin')
 // 观察池 / 后台管理都与「当前选中的组合」无关，隐藏组合选择器与组合增删按钮
 const showPortfolioActions = computed(() => !isWatchlistTab.value && !isAdminTab.value)
