@@ -42,6 +42,16 @@
         <div class="card-header">
           <div class="card-title">观察标的</div>
           <div class="card-actions">
+            <!-- 非默认排序时才出现：既显示当前排序状态，也是回到「已达标优先」的入口 -->
+            <button
+              v-if="sortKey"
+              type="button"
+              class="btn btn-ghost btn-sm wl-reset-sort"
+              title="恢复默认排序（已达标优先）"
+              @click="resetSort"
+            >
+              {{ activeSortLabel }} {{ sortOrder === 'asc' ? '↑' : '↓' }} · ↺ 恢复默认
+            </button>
             <button
               type="button"
               class="btn btn-ghost"
@@ -81,12 +91,27 @@
                 <th>标的</th>
                 <th class="wl-num">现价</th>
                 <th class="wl-num">TTM 分红</th>
-                <th class="wl-num">当前股息率</th>
-                <th class="wl-num">目标股息率</th>
-                <th class="wl-num">距目标</th>
-                <th class="wl-num">触发价</th>
-                <th class="wl-num">距触发价</th>
-                <th class="wl-num">目标价</th>
+                <!--
+                  6 个数值列共用一份定义（utils/watchlist.js 的 SORTABLE_COLUMNS）：
+                  表头文案与排序字段名不会各自漂移。点击切方向，Enter / Space 等价。
+                -->
+                <th
+                  v-for="col in SORTABLE_COLUMNS"
+                  :key="col.key"
+                  class="wl-num wl-sortable"
+                  :class="{ 'wl-sorted': sortKey === col.key }"
+                  :aria-sort="ariaSort(col.key)"
+                  tabindex="0"
+                  :title="`按${col.label}排序（点击切换升序 / 降序）`"
+                  @click="sortBy(col.key)"
+                  @keydown.enter.prevent="sortBy(col.key)"
+                  @keydown.space.prevent="sortBy(col.key)"
+                >
+                  <span class="wl-th-inner">
+                    <span class="wl-th-label">{{ col.label }}</span>
+                    <span class="sort-icon" aria-hidden="true">{{ sortIcon(col.key) }}</span>
+                  </span>
+                </th>
                 <th>信号</th>
                 <th>数据日期</th>
                 <th>操作</th>
@@ -312,7 +337,8 @@
  *
  * - 全局清单，不绑定组合（D1）：header 里的组合选择器在该 tab 下隐藏；
  * - 所有派生数值与两条信号都来自后端（D9），这里只做「信号 → 颜色/文案」映射、
- *   排序与序列构建（utils/watchlist.js）；
+ *   列表排序（默认已达标优先；表头可改按 6 个数值列排序）与序列构建
+ *   （utils/watchlist.js）；
  * - 信号语义是「是否达标」，与红涨绿跌无关；
  * - 刷新失败（行情降级 mock）时后端不写快照、回 `refresh_error`，本页只展示文案。
  */
@@ -328,6 +354,8 @@ import {
   formatGapPercent,
   formatYield,
   signalLabel,
+  SORTABLE_COLUMNS,
+  sortByColumn,
   sortForDisplay,
   summarize,
   summarizeRange,
@@ -417,8 +445,48 @@ const showForm = ref(false)
 const editingItem = ref(null)
 const formSubmitting = ref(false)
 
-/** 已达标优先，同档按距目标降序（排序在前端做，不在后端） */
-const displayItems = computed(() => sortForDisplay(items.value))
+// ---------- 表头排序 ----------
+// '' = 默认排序（已达标优先，同档按距目标降序）。点表头切到该列，再点切方向。
+// 排序纯在前端做：一次接口拿全量数据，切方向不重新请求，也不会丢展开的走势行。
+const sortKey = ref('')
+const sortOrder = ref('asc')
+
+const displayItems = computed(() =>
+  sortKey.value
+    ? sortByColumn(items.value, sortKey.value, sortOrder.value)
+    : sortForDisplay(items.value),
+)
+
+const activeSortLabel = computed(
+  () => SORTABLE_COLUMNS.find((col) => col.key === sortKey.value)?.label ?? '',
+)
+
+/** 与「资产列表」同一套图标语义：未排 ↕ / 升 ↑ / 降 ↓ */
+function sortIcon(key) {
+  if (sortKey.value !== key) return '↕'
+  return sortOrder.value === 'asc' ? '↑' : '↓'
+}
+
+/** aria-sort 只放在当前排序列上，其余列不设属性 */
+function ariaSort(key) {
+  if (sortKey.value !== key) return undefined
+  return sortOrder.value === 'asc' ? 'ascending' : 'descending'
+}
+
+function sortBy(key) {
+  if (sortKey.value === key) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortOrder.value = 'asc'
+  }
+}
+
+function resetSort() {
+  sortKey.value = ''
+  sortOrder.value = 'asc'
+}
+
 const summary = computed(() => summarize(items.value))
 
 // ---------- 加载 ----------
@@ -754,13 +822,70 @@ function handleTransfer(row) {
 }
 
 /*
-  观察池的表头不参与排序（顺序由 utils/watchlist.js 的 sortForDisplay 决定），
-  因此抹掉 .data-table 的 pointer 光标与 hover 变色，避免暗示「点表头能排序」。
+  12 列全用全局的 12px 左右内边距会吃掉 288px，1440px 视口下表格自然宽
+  1461px > 容器 1352px，操作列最后两个按钮（编辑 / 删除）被横向滚动裁掉；
+  加上 6 个排序图标后更宽。这里收到 8px（12 列共省 96px），
+  与「日报明细表」的密集表格是同一套处理。
+*/
+.wl-table th,
+.wl-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+/*
+  全局 .data-table 给所有 th 都加了 pointer 光标 + hover 变色，会误示「每列都能排序」。
+  先统一收掉，再只对 6 个可排序的数值列放开。
 */
 .wl-table th,
 .wl-table th:hover {
   cursor: default;
   color: var(--text-secondary);
+}
+
+.wl-table th.wl-sortable,
+.wl-table th.wl-sortable:hover {
+  cursor: pointer;
+}
+
+.wl-table th.wl-sortable:hover,
+.wl-table th.wl-sorted {
+  color: var(--primary-color);
+}
+
+/* 表头可以用 Enter / Space 排序，键盘焦点要看得见 */
+.wl-table th.wl-sortable:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
+}
+
+/* 标题与排序图标作为一个整体：列窄时不让 ↕ 单独掉到下一行 */
+.wl-th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.wl-th-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 抵消 main.css 里 .sort-icon 的 margin-left（这里用 gap 控制间距），
+   并把 12px 图标收窄到 10px —— 6 列合计又省 18px，1440px 下刚好不横向滚动 */
+.wl-th-inner .sort-icon {
+  flex: 0 0 auto;
+  width: 10px;
+  font-size: 10px;
+  margin-left: 0;
+}
+
+.wl-reset-sort {
+  white-space: nowrap;
 }
 
 .wl-num {

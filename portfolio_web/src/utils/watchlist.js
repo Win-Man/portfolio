@@ -5,7 +5,7 @@
  * 那是 `watchlist_math.py` 的职责。前端只做四类事情：
  *
  *   1. 信号 → 文案 / 颜色（来自 utils/watchlistColors.js）
- *   2. 列表排序（把已达标顶到前面）
+ *   2. 列表排序（默认把已达标顶到前面；表头可改按 6 个数值列排序）
  *   3. 曲线序列构建（日期升序、null 原样保留 = 断线，不插值）
  *   4. 展示格式化（2 位小数、正负号、无意义值给「—」）
  *
@@ -74,6 +74,56 @@ export function sortForDisplay(items) {
     if (gapB === null) return -1
     if (gapB !== gapA) return gapB - gapA
     return (a?.id ?? 0) - (b?.id ?? 0)
+  })
+}
+
+/**
+ * 表头可排序的 6 个数值列。`key` 直接就是接口返回的字段名，`label` 是表头文案 ——
+ * 放在一处定义，避免表头改了名字、排序却还在读旧字段（或反过来）。
+ *
+ * 这 6 列正是「观察标的」表里从「当前股息率」到「目标价」的连续区间；
+ * 标的名称、现价、TTM 分红、信号、数据日期、操作不参与排序。
+ */
+export const SORTABLE_COLUMNS = [
+  { key: 'current_yield', label: '当前股息率' },
+  { key: 'target_yield', label: '目标股息率' },
+  { key: 'yield_gap_points', label: '距目标' },
+  { key: 'yield_trigger_price', label: '触发价' },
+  { key: 'yield_trigger_gap_percent', label: '距触发价' },
+  { key: 'target_price', label: '目标价' },
+]
+
+const SORTABLE_KEYS = new Set(SORTABLE_COLUMNS.map((col) => col.key))
+
+/**
+ * 按指定数值列排序（表头点击时用）。与 `sortForDisplay` 的关系：
+ *
+ * - **基准顺序是默认排序**。值相等时靠 JS 稳定排序保持「已达标优先」的次序，
+ *   而不是退回按 id —— 用户按「当前股息率」排完，同息率的两只依然是达标的在前。
+ * - **空值永远沉底**：`null` / 非数字代表「未设目标价」「无分红算不出触发价」，
+ *   它不是 0。升序时若按 0 处理会集体冲到最前，降序时又会被真实价格盖住，
+ *   两种方向都不该让「— / 未设」混进有效数据里。
+ * - 只认 `SORTABLE_COLUMNS` 里的列，未知 key 退回默认排序（不悄悄按任意字段排）。
+ *
+ * 返回新数组，**不修改入参**。
+ *
+ * @param {Array<object>} items
+ * @param {string} key
+ * @param {'asc'|'desc'} [order='asc']
+ * @returns {Array<object>}
+ */
+export function sortByColumn(items, key, order = 'asc') {
+  if (!SORTABLE_KEYS.has(key)) return sortForDisplay(items)
+
+  const direction = order === 'desc' ? -1 : 1
+  return sortForDisplay(items).sort((a, b) => {
+    const valueA = toNumberOrNull(a?.[key])
+    const valueB = toNumberOrNull(b?.[key])
+    if (valueA === null && valueB === null) return 0
+    if (valueA === null) return 1
+    if (valueB === null) return -1
+    if (valueA !== valueB) return (valueA - valueB) * direction
+    return 0
   })
 }
 

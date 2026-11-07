@@ -3,7 +3,8 @@
  *
  * 锁定的口径：
  *   - 信号 → 文案 / 颜色：五个键全覆盖，未知取值退化成 unknown
- *   - 排序：hit → near → watch → unknown/not_set；同档按 yield_gap_points 降序
+ *   - 排序：默认 hit → near → watch → unknown/not_set，同档按 yield_gap_points 降序；
+ *     表头列排序 6 列升降序、空值沉底、同值保持默认次序
  *   - 曲线：日期升序、null 原样保留（断线），不插值；空数组不抛错
  *   - 格式化：2 位小数、正负号用 +/Unicode 减号「−」、无意义值给「—」
  *   - 陈旧：5 天不算、6 天才算（> 5 个自然日）
@@ -26,6 +27,8 @@ import {
   isDataStale,
   signalLabel,
   signalTone,
+  SORTABLE_COLUMNS,
+  sortByColumn,
   sortForDisplay,
   spanDays,
   staleDays,
@@ -305,4 +308,116 @@ test('buildRangeQuery：天数 / 自定义区间 / 全部三种入参都要拼�
   assert.equal(buildRangeQuery({ days: 0 }), 'days=90')
   assert.equal(buildRangeQuery({ days: 'abc' }), 'days=90')
   assert.equal(buildRangeQuery(null), 'days=90')
+})
+
+// ------------------------------------------------- 9. 表头列排序
+
+/**
+ * 4 只标的覆盖 6 个排序字段，其中「触发价 / 距触发价 / 目标价」刻意留 null。
+ * 默认排序（sortForDisplay）的基准次序是 [2, 4, 1, 3]：
+ *   乙 hit 最前；其余 watch 同档按 yield_gap_points 降序 → 丁 0、甲 -0.8、丙 -3.7。
+ */
+const SORT_ROWS = [
+  {
+    id: 1, name: '甲', current_yield: 4.2, target_yield: 5.0, yield_gap_points: -0.8,
+    yield_trigger_price: 9.5, yield_trigger_gap_percent: -5, target_price: 8.8,
+    yield_signal: 'watch', price_signal: 'watch',
+  },
+  {
+    id: 2, name: '乙', current_yield: 6.1, target_yield: 4.5, yield_gap_points: 1.6,
+    yield_trigger_price: 7.2, yield_trigger_gap_percent: 12.5, target_price: null,
+    yield_signal: 'hit', price_signal: 'not_set',
+  },
+  {
+    id: 3, name: '丙', current_yield: 2.3, target_yield: 6.0, yield_gap_points: -3.7,
+    yield_trigger_price: 12.0, yield_trigger_gap_percent: 40, target_price: 6.5,
+    yield_signal: 'watch', price_signal: 'watch',
+  },
+  {
+    id: 4, name: '丁', current_yield: 5.0, target_yield: 5.0, yield_gap_points: 0,
+    yield_trigger_price: null, yield_trigger_gap_percent: null, target_price: null,
+    yield_signal: 'watch', price_signal: 'not_set',
+  },
+]
+
+const idsOf = (rows) => rows.map((row) => row.id)
+
+test('SORTABLE_COLUMNS：恰好是 6 个可排序字段，顺序与表头一致', () => {
+  assert.deepEqual(SORTABLE_COLUMNS.map((col) => col.label), [
+    '当前股息率', '目标股息率', '距目标', '触发价', '距触发价', '目标价',
+  ])
+  assert.equal(new Set(SORTABLE_COLUMNS.map((col) => col.key)).size, 6)
+})
+
+test('sortByColumn：6 列升降序都按数值比较（不是字符串比较）', () => {
+  const cases = [
+    // key,                          升序,        降序
+    ['current_yield',               [3, 1, 4, 2], [2, 4, 1, 3]],
+    ['target_yield',                [2, 4, 1, 3], [3, 4, 1, 2]],
+    ['yield_gap_points',            [3, 1, 4, 2], [2, 4, 1, 3]],
+    ['yield_trigger_price',         [2, 1, 3, 4], [3, 1, 2, 4]],
+    ['yield_trigger_gap_percent',   [1, 2, 3, 4], [3, 2, 1, 4]],
+    ['target_price',                [3, 1, 2, 4], [1, 3, 2, 4]],
+  ]
+  for (const [key, asc, desc] of cases) {
+    assert.deepEqual(idsOf(sortByColumn(SORT_ROWS, key, 'asc')), asc, `${key} 升序`)
+    assert.deepEqual(idsOf(sortByColumn(SORT_ROWS, key, 'desc')), desc, `${key} 降序`)
+  }
+})
+
+test('sortByColumn：null / 非数字在升降序都沉底，绝不冒充 0', () => {
+  const rows = [
+    { id: 1, target_price: null },
+    { id: 2, target_price: 3 },
+    { id: 3, target_price: 9 },
+    { id: 4, target_price: 'abc' },
+  ]
+  assert.deepEqual(idsOf(sortByColumn(rows, 'target_price', 'asc')), [2, 3, 1, 4])
+  assert.deepEqual(idsOf(sortByColumn(rows, 'target_price', 'desc')), [3, 2, 1, 4])
+})
+
+test('sortByColumn：字符串数字也按数值排（后端偶发返回字符串）', () => {
+  const rows = [
+    { id: 1, current_yield: '9.5' },
+    { id: 2, current_yield: 2.1 },
+    { id: 3, current_yield: '4' },
+  ]
+  assert.deepEqual(idsOf(sortByColumn(rows, 'current_yield', 'asc')), [2, 3, 1])
+})
+
+test('sortByColumn：同值保持默认「已达标优先」的次序，不退回按 id', () => {
+  const tied = [
+    {
+      id: 1, current_yield: 5, yield_gap_points: -1,
+      yield_signal: 'watch', price_signal: 'watch',
+    },
+    {
+      id: 2, current_yield: 5, yield_gap_points: -2,
+      yield_signal: 'hit', price_signal: 'hit',
+    },
+  ]
+  assert.deepEqual(idsOf(sortByColumn(tied, 'current_yield', 'asc')), [2, 1])
+  assert.deepEqual(idsOf(sortByColumn(tied, 'current_yield', 'desc')), [2, 1])
+})
+
+test('sortByColumn：返回新数组，不修改入参', () => {
+  const rows = [
+    { id: 1, current_yield: 8, yield_signal: 'watch', price_signal: 'watch' },
+    { id: 2, current_yield: 1, yield_signal: 'watch', price_signal: 'watch' },
+  ]
+  const out = sortByColumn(rows, 'current_yield', 'asc')
+  assert.notStrictEqual(out, rows)
+  assert.deepEqual(idsOf(rows), [1, 2])
+  assert.deepEqual(idsOf(out), [2, 1])
+})
+
+test('sortByColumn：未知列 / 非数组安全退化到默认排序', () => {
+  assert.deepEqual(
+    idsOf(sortByColumn(SORT_ROWS, 'name', 'asc')),
+    idsOf(sortForDisplay(SORT_ROWS)),
+  )
+  assert.deepEqual(idsOf(sortByColumn(SORT_ROWS, '', 'asc')), idsOf(sortForDisplay(SORT_ROWS)))
+  assert.deepEqual(sortByColumn(null, 'current_yield'), [])
+  assert.deepEqual(sortByColumn(undefined, 'current_yield'), [])
+  assert.deepEqual(sortByColumn('nope', 'current_yield'), [])
 })
