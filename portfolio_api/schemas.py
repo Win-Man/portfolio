@@ -560,3 +560,60 @@ class BackupListResponse(BaseModel):
     items: List[BackupInfo] = []
     total: int = 0
     total_size_bytes: int = 0
+
+
+# ---------- 后台管理：日报邮件推送 ----------
+
+class MailConfigResponse(BaseModel):
+    """邮件通道的配置状态。**不回传密码**，账号也打码。"""
+
+    configured: bool = False
+    enabled: bool = False                       # 定时任务开关（DAILY_REPORT_MAIL_ENABLED）
+    schedule_time: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_ssl: bool = True
+    username: str = ""                          # 打码后的账号，例如 825***@qq.com
+    from_name: str = ""
+    recipients: List[str] = []
+    subject_prefix: str = ""
+    missing: List[str] = []                     # 还缺哪些配置项（可直接展示给用户）
+    note: str = ""                              # 一句人话说明怎么配
+
+
+class MailSendResponse(BaseModel):
+    success: bool = True
+    message: str = ""
+    recipients: List[str] = []
+    report_count: int = 0
+    report_date: Optional[date] = None
+    subject: str = ""
+
+
+# ---------- 后台管理：A 股交易日历 ----------
+
+class TradingDayInfo(BaseModel):
+    """某一天开不开市。`reason` 直接展示，不让前端自己拼星期几。"""
+
+    day: date
+    is_trading: bool
+    weekday: str = ""                 # "周一"
+    reason: str = ""                   # "交易日" / "周一，A股休市"
+    source: str = "calendar"           # calendar / weekday-fallback
+
+
+class TradingCalendarResponse(BaseModel):
+    """交易日历状态：今天 + 覆盖范围 + 未来若干天。
+
+    「今天是否开市」单独给一份，前端要在任务卡片上方显示一条横幅；
+    `upcoming` 用来画未来的开市/休市小日历条。
+    """
+
+    today: TradingDayInfo
+    trading_day_only: bool = True      # 全局开关：任务是否只在交易日跑
+    calendar_start: Optional[date] = None
+    calendar_end: Optional[date] = None
+    calendar_count: int = 0
+    calendar_stale: bool = False       # 日历没覆盖到今天（需要刷新/网络不通）
+    note: str = ""                     # 一句人话，例如「今天休市，任务将在 11-09 恢复」
+    upcoming: List[TradingDayInfo] = []

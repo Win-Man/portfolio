@@ -46,11 +46,14 @@ portfolio/
   - 「转入持仓」：跳回 `#/` 并打开既有资产表单、预填代码 / 名称 / 现价（数量自己填），仍走既有写入接口，没有第二条资产写入链路
   - 只有**真实价**才落库：行情降级模拟价时不写快照，保留上次数据并提示「行情获取失败，已保留上次数据」
 
-- **后台管理**（header 第四个 tab，`#/admin`）：看两个每日定时任务的状态与历史
+- **后台管理**（header 第四个 tab，`#/admin`）：看五个定时任务的状态与历史，外加数据库体积/备份与日报邮件推送
+  - **只在 A 股交易日运行**：周末与节假日自动跳过（依据真实交易日历，能识别调休与春节/国庆连休）；页顶的「交易日历」卡片显示今天开不开市、下一个交易日与未来 10 天
   - **投资组合价格刷新**（默认 15:05）：把全部资产的最新价刷成当日收盘价，同代码只请求一次，只写真实价
   - **观察池每日快照**（默认 15:30）：给每只观察标的抓行情 + TTM 分红写当天快照，只补缺不覆盖
-  - 每个任务卡片展示：计划时刻、**最后运行时间**、上次结果与耗时、下次预计运行、累计运行次数与状态分布；下方是运行历史（触发方式 / 结果 / 耗时 / 成功失败数 / 说明 + 逐条失败原因）
-  - 支持「**立即运行**」：不用等到点，跑完立即刷新卡片与历史；页面每 30 秒自动刷新
+  - **组合日报 / 观察池日报**（默认 15:40 / 15:45）：生成并落库当天日报，读的是前两个任务刚写好的收盘价
+  - **日报邮件推送**（默认 15:50）：把当天全部日报合成一封 HTML 邮件发到配置的邮箱，也可在页面上手动发送
+  - 每个任务卡片展示：计划时刻（如「交易日 15:05」）、**最后运行时间**、上次结果与耗时、下次预计运行、累计运行次数与状态分布；下方是运行历史（触发方式 / 结果 / 耗时 / 成功失败数 / 说明 + 逐条失败原因）
+  - 支持「**立即运行**」：不用等到点，跑完立即刷新卡片与历史（手动触发不受交易日限制）；页面每 30 秒自动刷新
 
 > 数据来源与每个数字的计算口径详见 [`docs/data-processing.md`](docs/data-processing.md)。
 
@@ -132,13 +135,18 @@ npm run preview  # 预览生产构建
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/admin/jobs` | 四个任务的配置（开关 / 计划时刻 / 时区）+ **最后运行时间** + 下次预计运行 + 累计运行与状态分布 |
+| GET | `/api/admin/jobs` | 五个任务的配置（开关 / 计划时刻 / 时区）+ **最后运行时间** + 下次预计运行 + 累计运行与状态分布 |
 | GET | `/api/admin/jobs/{key}/runs?limit=20&offset=0` | 运行历史，**新的在前**（`limit` 1–100） |
-| POST | `/api/admin/jobs/{key}/run` | 立即执行一次（不受开关与时刻限制），返回本次运行记录 |
+| POST | `/api/admin/jobs/{key}/run` | 立即执行一次（不受开关、时刻与交易日限制），返回本次运行记录 |
+| GET | `/api/admin/trading-calendar?days=10` | 今天是否开市 + 下一个交易日 + 日历覆盖范围（`calendar_stale` 表示没覆盖到今天）+ 未来 N 天 |
+| POST | `/api/admin/trading-calendar/refresh` | 强制联网刷新交易日历（akshare）；失败仍返回当前状态并置 `calendar_stale=true` |
 
-`key` 共四个：`asset_price_refresh`（15:05 价格刷新）、`watchlist_snapshot`（15:30 观察池快照）、
-`portfolio_daily_report`（15:40 组合日报）、`watchlist_daily_report`（15:45 观察池日报）。
-未知 key → `404 任务不存在`。
+`key` 共五个：`asset_price_refresh`（15:05 价格刷新）、`watchlist_snapshot`（15:30 观察池快照）、
+`portfolio_daily_report`（15:40 组合日报）、`watchlist_daily_report`（15:45 观察池日报）、
+`daily_report_mail`（15:50 日报邮件）。未知 key → `404 任务不存在`。
+
+计划时刻默认是**交易日**的（`schedule_label` 为 `交易日 15:05（Asia/Shanghai）`），
+`next_run_at` 会跳过周末与节假日 —— 周五收盘后显示的是下周一，而不是一个注定被跳过的周六 15:05。
 
 时间口径：返回的是 **Asia/Shanghai 的墙上时间**（`2026-11-03T15:05:12`，不带时区后缀）——
 任务由「15:30 这种本地时刻」驱动，前端直接按本地显示，不做时区换算。
@@ -166,6 +174,35 @@ npm run preview  # 预览生产构建
 不是 SQLite、或库文件缺失时 `GET /database` 仍返回 `200`（`supported` / `exists` 为 `false`），
 让前端的任务列表照常显示。备份目录由 `BACKUP_DIR` 配置（默认 `portfolio_api/backups/`），
 **不自动清理**，删哪份由用户决定；该目录已在 `.gitignore` 里。
+
+
+### 日报邮件推送
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/mail` | 配置状态：是否可用、缺哪些项、收件人、SMTP、计划时刻（**不回传密码**，账号打码为 `825***@qq.com`） |
+| POST | `/api/admin/mail/send?report_date=2026-11-07` | 立即把某天的日报发出去（默认今天）；未配置 → `409`，当天没有日报 → `404`，SMTP 失败 → `502` |
+| POST | `/api/admin/mail/test` | 发一封只含说明文字的测试邮件，验证通道 |
+
+配置全在 `.env`：`MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_RECIPIENTS`（`MAIL_RECIPIENTS` 留空则发给自己），
+外加 `MAIL_SMTP_HOST`（默认 `smtp.qq.com`）、`MAIL_SMTP_PORT`（`465`）、`MAIL_SMTP_SSL`（`true`）、
+`DAILY_REPORT_MAIL_ENABLED` / `DAILY_REPORT_MAIL_TIME`（默认 15:50）。
+
+四个实现要点：
+
+1. **`MAIL_PASSWORD` 是「授权码」，不是登录密码**。QQ / 163 都要在邮箱设置里开启
+   POP3/SMTP 服务后生成。实测**授权码错误时 QQ 会直接断连而不返回 535**，
+   所以 `smtp_send` 专门把「登录阶段断连」也翻译成「多半是账号或授权码不对」，
+   而不是把 `Connection unexpectedly closed` 原样抛给用户。
+2. **一封邮件，不是两封**：当天全部组合日报 + 观察池日报合成一封，主题里带两边盈亏
+   （`2026-11-07 投资日报 · 组合 -¥573.00 · 观察池 -¥450.40`），收件箱里一眼能看出今天怎么样。
+3. **邮件 HTML 只能用 table + 内联样式**：Outlook / 邮箱大师不支持 flex / grid，
+   `<style>` 也可能被整段删掉，所以没有 class、没有外链字体，条形图用「宽度百分比的单元格」画。
+   同时给 `text/plain` 版本（有些客户端默认不显示 HTML）。
+4. **`From` 必须与登录账号一致**：QQ 会校验，不一致直接拒信。
+
+空组合在邮件里只占一行说明（不画 6 张全「—」的卡片）；某天没生成日报时任务记
+`failed` 并等调度重试，而不是发一封空信。
 
 
 ### 收入日历
@@ -263,7 +300,7 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 
 #### 定时任务与后台管理
 
-两个每日任务，共用一个调度循环（`portfolio_api/scheduler.py`），在 `main.py` 的 `lifespan` 里
+五个任务，共用一个调度循环（`portfolio_api/scheduler.py`），在 `main.py` 的 `lifespan` 里
 `asyncio.create_task` 启动，关闭时 `cancel()` + `await` 收尾。**零新依赖**
 （标准库 `asyncio` + `zoneinfo`，不引入 APScheduler / celery）。
 
@@ -271,14 +308,36 @@ is_stale    : 今天(Asia/Shanghai) − snapshot_date > 5 个自然日；无快�
 |---|---|---|---|
 | `asset_price_refresh` | 投资组合全部资产的最新价刷成当日行情价 | 15:05 | `ASSET_PRICE_REFRESH_ENABLED` / `ASSET_PRICE_REFRESH_TIME` |
 | `watchlist_snapshot` | 每只观察标的的当日快照（行情 + TTM 分红） | 15:30 | `WATCHLIST_SNAPSHOT_ENABLED` / `WATCHLIST_SNAPSHOT_TIME` |
+| `portfolio_daily_report` | 每个组合的当日日报 | 15:40 | `DAILY_REPORT_PORTFOLIO_ENABLED` / `DAILY_REPORT_PORTFOLIO_TIME` |
+| `watchlist_daily_report` | 观察池日报（全局一份） | 15:45 | `DAILY_REPORT_WATCHLIST_ENABLED` / `DAILY_REPORT_WATCHLIST_TIME` |
+| `daily_report_mail` | 当日全部日报合成一封邮件发出 | 15:50 | `DAILY_REPORT_MAIL_ENABLED` / `DAILY_REPORT_MAIL_TIME` |
 
-时刻为什么这么排：15:00 收盘，15:05 取到的是收盘价；15:30 留出间隔，避免两个任务同时打行情接口。
+时刻为什么这么排：15:00 收盘，15:05 取到的是收盘价；15:30 留出间隔，避免两个任务同时打行情接口；
+日报必须读到刷新后的价格与快照，邮件必须等两份日报都落库。
+
+**只在 A 股交易日运行**（`SCHEDULE_TRADING_DAY_ONLY`，默认 `true`）。周末与节假日没有新行情：
+跑价格刷新只是把同一个价再写一遍，观察池会多出一条与周五完全相同的快照，日报的「今日盈亏」恒为 0。
+
+判断依据是 `trading_calendar.py` 里 akshare 的真实交易日历（`trading_days` 表缓存，约 8800 个日期，
+覆盖到当年年底），**不是简单的「周一~周五」** —— 调休上班的周末 A 股照常休市，而春节/国庆连休
+又横跨工作日，按星期几算必然出错。三条规则：
+
+1. 日期在日历里 → 交易日；
+2. 日期在日历覆盖区间内但不在集合 → 休市（确定结论）；
+3. 日期超出日历最晚日期 → 视为「日历过期」，先尝试联网刷新，仍不覆盖就退化成「周一~周五」并记 warning。
+   第 3 条是刻意留的兜底：若把「不在日历里」一律当休市，到了 2027 年日历没更新时**所有任务会永久静默跳过**，
+   而界面上只显示「非交易日」，这种故障最难查。
+
+非交易日仍会写一条 `skipped` 记录（`2026-11-07 周六，A股休市，非交易日跳过`）——「今天跑过但没活干」
+和「调度根本没在跑」必须能区分开。**手动触发不受日历限制**：用户点了按钮就是想现在跑。
 
 - 每 60 秒一个 tick，且**启动即 tick**：服务在 15:05 之后启动会立刻补跑当天该跑的任务，不用等到第二天。
 - 同一任务同一天最多尝试 **3 轮**（`partial` / `failed` 才重试），避免数据源整体挂掉时每分钟重试一整天。
   `success` 与 `skipped` 都算「今天已有结论」，不会再跑。
 - **每次执行都写一条 `job_runs`**（`job_key / trigger / status / 起止时间 / 耗时 / 总数 / 成功 / 失败 / 说明 / 逐条错误`），
   后台管理页的「最后运行时间」与历史全部来自这张表。
+- 后台页顶部有「交易日历」卡片：今天开不开市、下一个交易日、以及未来 10 天的开市/休市日历条，
+  可点「刷新日历」强制联网更新（`GET/POST /api/admin/trading-calendar`）。
 - 「到点但没有活干」（如观察池今天已经齐了）**每天只留一条 `skipped`**：既能看到「今天跑过、确实无需更新」，
   又不会每分钟攒一条垃圾记录。手动触发一定落库 —— 点了按钮就该看到记录。
 - 价格任务只做三件事：写 `price`、写 `price_source=real`、有 TTM 分红时重算 `ttm_yield`。
@@ -451,8 +510,13 @@ portfolio_api/
 ├── schemas.py          # Pydantic
 ├── portfolio_math.py   # ★ 组合口径唯一实现（市值 / 年收入 / 加权 TTM / mock 标记 / 分红状态与来源归类）
 ├── watchlist_math.py   # ★ 观察池口径唯一实现（当前股息率 / 触发价 / 两条信号 / 陈旧判定，纯函数）
-├── scheduler.py        # ★ 定时任务引擎（注册表 / 每日循环 / 3 次重试 / job_runs 记录）+ 两个任务
+├── scheduler.py        # ★ 定时任务引擎（注册表 / 每日循环 / 3 次重试 / job_runs 记录 / 非交易日跳过）+ 五个任务
+├── trading_calendar.py # ★ A 股交易日历（akshare 日历缓存 + 三条判定规则 + 日历过期兜底）
 ├── watchlist_history.py    # ★ 观察池历史回填（腾讯日K × 当日滚动 12 个月分红 → 历史快照）
+├── daily_reports.py    # ★ 日报：采集行情 → 计算 → UPSERT 落库（组合 / 观察池）
+├── report_math.py      # ★ 日报口径纯函数（今日盈亏 / 汇总 / 榜单 / 收入结构 / 信号分桶）
+├── report_mail.py      # ★ 日报邮件：HTML + 纯文本双版本渲染、SMTP 发送与错误翻译
+├── db_backup.py        # ★ SQLite 体积统计（dbstat）与在线备份
 ├── market.py           # ★ 代码规则唯一来源（市场前缀 / 是否 ETF）
 ├── net.py              # ★ 行情请求绕过系统代理（NO_PROXY + trust_env=False）
 ├── routers/
@@ -461,7 +525,8 @@ portfolio_api/
 │   ├── goals.py        # 年收入目标 CRUD + 进度计算
 │   ├── calendar.py     # 收入日历：按派息日归月 + 确认 / 补录
 │   ├── watchlist.py    # ★ 观察池 CRUD + 每日快照 UPSERT + 走势序列
-│   ├── admin.py        # ★ 后台管理：任务配置 / 最后运行时间 / 运行历史 / 立即运行
+│   ├── admin.py        # ★ 后台管理：任务配置与历史 / 数据库体积备份 / 邮件配置与推送
+│   ├── reports.py      # 日报列表 / 详情 / 立即生成 / 删除
 │   └── stocks.py       # 搜索 / 价格 / 分红（个股 + ETF 分派，含分红 in-memory 缓存）
 ├── tests/
 │   ├── conftest.py
@@ -471,6 +536,11 @@ portfolio_api/
 │   ├── test_portfolio_manage.py  # 组合新增 / 重命名 / 删除：名称校验与级联
 │   ├── test_watchlist.py         # ★ 观察池：CRUD / 校验 / 两条信号 / 快照 UPSERT / mock 不落库 / 历史回填
 │   ├── test_admin_jobs.py        # ★ 定时任务：任务卡片 / 手动触发 / 同码去重 / mock 不落库 / 重试与跳过
+│   ├── test_trading_calendar.py  # ★ 交易日历：区间内休市 / 日历过期退化为工作日 / 刷新全量与失败保留 / 非交易日跳过
+│   ├── test_report_math.py       # 日报口径：昨收缺失 / 分母覆盖面 / 负成本 / 榜单 / 信号分桶
+│   ├── test_daily_reports.py     # 日报落库：UPSERT 幂等 / 行情失败兜底 / mock 不采信 / 调度兜异常
+│   ├── test_admin_database.py    # 数据库体积与备份：按表占用 / 在线备份可用 / 文件名白名单
+│   ├── test_report_mail.py       # 日报邮件：渲染口径 / MIME 结构 / 发送链路 / 任务三条路径 / SMTP 错误翻译
 │   └── test_etf.py     # ETF 支持专项测试
 └── pyproject.toml      # uv 依赖
 
@@ -526,7 +596,7 @@ portfolio_web/
     │   ├── goal.js               # 目标接口（无假数据兜底，透传后端 detail）
     │   ├── calendar.js           # 日历 / 确认 / 补录接口（同上）
     │   ├── watchlist.js          # ★ 观察池接口（无假数据兜底，透传后端 detail）
-    │   ├── admin.js              # ★ 定时任务接口（任务列表 / 历史 / 立即运行）
+    │   ├── admin.js              # ★ 后台接口（任务列表 / 历史 / 立即运行 / 数据库备份 / 邮件 / 交易日历）
     │   └── stock.js
     └── styles/main.css
 ```
@@ -534,14 +604,16 @@ portfolio_web/
 ## 测试
 
 ```bash
-# 后端：262 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ 代理绕过 9 例 /
-#       定时任务 19 例（同码去重 / mock 不落库 / 3 次重试 / 跳过只记一条 / 崩溃留痕）/ ETF /
+# 后端：377 个用例（API / 标的搜索 14 例（名称归一化 / 缓存残缺兜底）/ 代理绕过 9 例 /
+#       定时任务 19 例（同码去重 / mock 不落库 / 3 次重试 / 跳过只记一条 / 崩溃留痕）/
+#       交易日历 27 例（区间内休市 / 日历过期退化为工作日 / 刷新全量与失败保留 / 非交易日跳过）/
+#       日报邮件 29 例（渲染 / SMTP 错误翻译 / 手动发送）/ 数据库体积与备份 22 例 / ETF /
 #       历年分红口径（含刷新响应回归）/ 成本盈亏含负成本与高精度成本 / 刷新缓存时效 /
 #       年收入目标 19 例 / 组合管理 6 例 / 收入日历 24 例 / 观察池 53 例）
 cd portfolio_api && uv run pytest -q
 
-# 前端：118 个用例（数字格式化 / 价格精度、成本↔总额换算、饼图数据整理、TOP N 取数、悬浮提示、
-#       目标展示 18 例、日历纯函数 15 例、观察池展示纯函数 19 例、后台管理展示 11 例）
+# 前端：139 个用例（数字格式化 / 价格精度、成本↔总额换算、饼图数据整理、TOP N 取数、悬浮提示、
+#       目标展示 18 例、日历纯函数 15 例、观察池展示纯函数 19 例、后台管理展示 11 例、观察池排序 12 例）
 cd portfolio_web && npm test
 
 # 浏览器端验证饼图悬浮提示（需本地安装 Chrome，可用 CHROME_PATH 覆盖路径）

@@ -113,7 +113,7 @@ def create_item(client, code="601398", name="工商银行", target_yield=5.0):
 # ---------- GET /api/admin/jobs ----------
 
 def test_list_jobs_returns_all_tasks_with_config(client):
-    """四个任务都要出现在后台管理页，且带计划时刻、开关、时区。"""
+    """五个任务都要出现在后台管理页，且带计划时刻、开关、时区。"""
     rows = client.get("/api/admin/jobs").json()
     by_key = {r["key"]: r for r in rows}
 
@@ -122,12 +122,13 @@ def test_list_jobs_returns_all_tasks_with_config(client):
         "watchlist_snapshot",
         "portfolio_daily_report",
         "watchlist_daily_report",
+        "daily_report_mail",
     }
 
     price_job = by_key["asset_price_refresh"]
     assert price_job["name"] == "投资组合价格刷新"
     assert price_job["schedule_time"] == "15:05"
-    assert price_job["schedule_label"] == "每天 15:05（Asia/Shanghai）"
+    assert price_job["schedule_label"] == "交易日 15:05（Asia/Shanghai）"
     assert price_job["timezone"] == "Asia/Shanghai"
 
     snapshot_job = by_key["watchlist_snapshot"]
@@ -136,8 +137,10 @@ def test_list_jobs_returns_all_tasks_with_config(client):
     # 两份日报排在刷新任务之后：日报要读刚写好的收盘价
     assert by_key["portfolio_daily_report"]["schedule_time"] == "15:40"
     assert by_key["watchlist_daily_report"]["schedule_time"] == "15:45"
+    # 邮件排在两份日报之后：否则信里会缺一份日报
+    assert by_key["daily_report_mail"]["schedule_time"] == "15:50"
 
-    # conftest 里两个开关都是 false
+    # conftest 里五个开关都是 false
     assert all(r["enabled"] is False for r in rows)
     # 从没跑过 → 没有最后运行时间，也不该显示「下次运行」
     assert all(r["last_run"] is None for r in rows)

@@ -180,6 +180,82 @@
         </div>
       </section>
 
+      <!-- 日报邮件：与数据库卡片一样独立于任务列表，任务接口挂了也能发测试邮件 -->
+      <section v-if="mailInfo" class="card admin-mail">
+        <div class="card-header">
+          <div class="card-title">
+            日报邮件推送
+            <span class="admin-badge" :class="mailInfo.configured ? 'on' : 'off'">
+              {{ mailInfo.configured ? '已配置' : '未配置' }}
+            </span>
+          </div>
+          <div class="card-actions">
+            <button
+              type="button"
+              class="btn btn-ghost"
+              :disabled="testingMail || !mailInfo.configured"
+              :title="mailInfo.configured ? '发一封只含说明文字的测试邮件' : '先在 .env 里配置 SMTP'"
+              @click="handleTestMail"
+            >
+              <span v-if="testingMail" class="admin-spinner"></span>
+              {{ testingMail ? '发送中...' : '✉ 测试邮件' }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="sendingMail || !mailInfo.configured"
+              @click="handleSendMail"
+            >
+              <span v-if="sendingMail" class="admin-spinner"></span>
+              {{ sendingMail ? '发送中...' : '↗ 发送今日日报' }}
+            </button>
+          </div>
+        </div>
+
+        <p class="admin-desc">{{ mailInfo.note }}</p>
+
+        <div class="admin-meta mail-meta">
+          <div class="admin-meta-item strong">
+            <span class="k">收件人</span>
+            <span class="v">
+              {{ mailInfo.recipients.length ? mailInfo.recipients.join('、') : '—' }}
+              <span class="admin-sub">{{ mailInfo.recipients.length }} 个地址</span>
+            </span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">发件账号</span>
+            <span class="v">{{ mailInfo.username || '—' }}</span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">SMTP</span>
+            <span class="v">
+              {{ mailInfo.smtp_host }}:{{ mailInfo.smtp_port }}
+              <span class="admin-sub">{{ mailInfo.smtp_ssl ? 'SSL 直连' : 'STARTTLS' }}</span>
+            </span>
+          </div>
+          <div class="admin-meta-item">
+            <span class="k">定时发送</span>
+            <span class="v">
+              {{ mailInfo.enabled ? `每天 ${mailInfo.schedule_time}` : '已关闭' }}
+              <span class="admin-sub">
+                {{ mailInfo.enabled ? '日报生成完成后自动发' : '只能手动发送' }}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div v-if="!mailInfo.configured" class="admin-hint-note">
+          还缺 <code>{{ mailInfo.missing.join('、') }}</code>：在
+          <code>portfolio_api/.env</code> 里填写后重启后端。QQ 邮箱的
+          <code>MAIL_PASSWORD</code> 要填<b>授权码</b>（邮箱设置 → 账户 → 开启 POP3/SMTP
+          服务 → 生成授权码），填登录密码会报 535 认证失败。<br>
+          配置完成后如果今天已经过了 {{ mailInfo.schedule_time }}
+          （自动发送会显示「跳过」），点「发送今日日报」补发当天这一封。<br>
+          自动发送只在 <b>A 股交易日</b>进行，周末与节假日不会发信。
+        </div>
+        <div v-else-if="mailError" class="admin-hint-error">{{ mailError }}</div>
+      </section>
+
       <div v-if="error" class="admin-error">
         <span>{{ error }}</span>
         <button type="button" class="btn btn-secondary btn-sm" @click="loadAll">重试</button>
@@ -188,6 +264,58 @@
       <div v-else-if="loading" class="loading">加载中</div>
 
       <div v-else class="admin-jobs">
+        <!-- 交易日历：先解释「今天为什么不跑」，再看五个任务卡片 -->
+        <section v-if="calendar" class="card admin-calendar">
+          <div class="card-header">
+            <div class="card-title">
+              交易日历
+              <span class="admin-key">A 股</span>
+            </div>
+            <div class="card-actions">
+              <span class="admin-badge" :class="calendar.today.is_trading ? 'on' : 'off'">
+                {{ calendar.today.is_trading ? '今天开市' : '今天休市' }}
+              </span>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="refreshingCalendar"
+                @click="handleRefreshCalendar"
+              >
+                {{ refreshingCalendar ? '刷新中...' : '↻ 刷新日历' }}
+              </button>
+            </div>
+          </div>
+
+          <p class="admin-desc">{{ calendar.note }}</p>
+
+          <div class="cal-strip">
+            <div
+              v-for="d in calendar.upcoming"
+              :key="d.day"
+              class="cal-day"
+              :class="{
+                open: d.is_trading,
+                closed: !d.is_trading,
+                today: d.day === calendar.today.day,
+              }"
+              :title="`${d.day} ${d.weekday} · ${d.reason}`"
+            >
+              <span class="cal-date">{{ d.day.slice(5).replace('-', '/') }}</span>
+              <span class="cal-week">{{ d.weekday.replace('周', '') }}</span>
+            </div>
+          </div>
+
+          <div class="cal-foot">
+            <span v-if="calendar.calendar_stale" class="cal-warn">
+              ⚠ 日历未覆盖到今天，判断已退化为「周一~周五」，请点「刷新日历」联网更新。
+            </span>
+            <span v-else>
+              日历覆盖 {{ calendar.calendar_start }} ~ {{ calendar.calendar_end }}，共
+              {{ calendar.calendar_count }} 个交易日；蓝色为开市日。
+            </span>
+          </div>
+        </section>
+
         <section v-for="job in jobs" :key="job.key" class="card admin-job">
           <div class="card-header">
             <div class="card-title">
@@ -335,7 +463,12 @@ import {
   getDatabaseInfo,
   getJobRuns,
   getJobs,
+  getMailConfig,
+  getTradingCalendar,
+  refreshTradingCalendar,
   runJobNow,
+  sendMailNow,
+  sendTestMail,
 } from '../api/admin.js'
 import { toast } from '../composables/useToast.js'
 import { formatBytes } from '../utils/format.js'
@@ -368,6 +501,16 @@ const backingUp = ref(false)
 const deletingName = ref('')
 const dbError = ref('')
 
+// 邮件卡片同理独立：SMTP 没配好不该影响备份与任务列表
+const mailInfo = ref(null)
+const sendingMail = ref(false)
+const testingMail = ref(false)
+const mailError = ref('')
+
+// 交易日历：解释「今天为什么没跑」，失败也不该让任务卡片变空
+const calendar = ref(null)
+const refreshingCalendar = ref(false)
+
 let timer = null
 
 const overview = computed(() => overviewOf(jobs.value))
@@ -384,9 +527,16 @@ function countsText(job) {
  * 卡片上的结果摘要。跳过时只说「今天无需更新」——
  * 完整原因（如「2026-11-03 的快照已齐」）放在 title 与历史表的说明列里，
  * 否则一行塞不下，还会和「累计运行」挤在一起。
+ *
+ * 例外：非交易日的跳过要单独说。显示「今天无需更新」会让人以为
+ * 「数据已经是今天的、只是没有变化」，而真实情况是「今天压根没开盘」。
  */
 function cardResultText(run) {
-  if (run.status === 'skipped') return '今天无需更新'
+  if (run.status === 'skipped') {
+    // 前面已经有「跳过」状态标签，这里只补原因，别再重复「跳过」二字
+    if ((run.message || '').includes('非交易日')) return '非交易日'
+    return '今天无需更新'
+  }
   return summarizeRun(run)
 }
 
@@ -406,12 +556,47 @@ async function loadRuns(key) {
   }
 }
 
+/**
+ * 交易日历。独立容错：接口挂了只是这块不显示，
+ * 五个任务卡片照常渲染（它们本来就会各自显示「非交易日跳过」）。
+ */
+async function loadCalendar() {
+  try {
+    calendar.value = await getTradingCalendar({ days: 10 })
+  } catch (e) {
+    console.error('加载交易日历失败:', e)
+  }
+}
+
+async function handleRefreshCalendar() {
+  if (refreshingCalendar.value) return
+  refreshingCalendar.value = true
+  try {
+    const data = await refreshTradingCalendar({ days: 10 })
+    calendar.value = data
+    if (data.calendar_stale) {
+      // 后端刷新失败不报错（仍旧返回当前状态），所以要在这里提示
+      toast.error('日历仍未更新，请检查网络或配置后重试')
+    } else {
+      toast.success(`交易日历已更新，覆盖到 ${data.calendar_end}`)
+    }
+    // 日历变了，「下次运行」可能跟着变
+    await loadAll({ quiet: true })
+  } catch (e) {
+    toast.error(e.message || '刷新日历失败')
+  } finally {
+    refreshingCalendar.value = false
+  }
+}
+
 async function loadAll({ quiet = false } = {}) {
   if (!quiet) {
     loading.value = true
     error.value = ''
   }
   try {
+    // 日历与任务列表并行拉；日历自己吞异常，不会影响 error 状态
+    if (!quiet) loadCalendar()
     const list = await getJobs()
     applyJobs(list)
     await Promise.all(jobs.value.map((job) => loadRuns(job.key)))
@@ -501,11 +686,52 @@ async function handleDeleteBackup(row) {
   }
 }
 
+// ---------- 日报邮件 ----------
+
+async function loadMail() {
+  try {
+    mailInfo.value = await getMailConfig()
+    mailError.value = ''
+  } catch (e) {
+    // 邮件卡片加载失败只影响自己：不接管整页的 error，也不清掉已有数据
+    console.error('加载邮件配置失败:', e)
+    mailError.value = e.message || '邮件配置加载失败'
+  }
+}
+
+/** 发送失败的原因（535 / 连接超时 / 当天没日报）直接 toast，不弹窗打断操作 */
+async function handleSendMail() {
+  sendingMail.value = true
+  try {
+    const res = await sendMailNow()
+    toast.success(`${res.message} · ${res.recipients.join('、')}`)
+  } catch (e) {
+    toast.error(e.message || '发送失败，请稍后重试')
+  } finally {
+    sendingMail.value = false
+    await loadMail()
+  }
+}
+
+async function handleTestMail() {
+  testingMail.value = true
+  try {
+    const res = await sendTestMail()
+    toast.success(res.message || '测试邮件已发送')
+  } catch (e) {
+    toast.error(e.message || '测试邮件发送失败')
+  } finally {
+    testingMail.value = false
+    await loadMail()
+  }
+}
+
 function startPolling() {
   stopPolling()
   timer = setInterval(() => {
     loadAll({ quiet: true })
     loadDatabase({ quiet: true })
+    loadMail()
   }, POLL_INTERVAL_MS)
 }
 
@@ -519,11 +745,13 @@ function stopPolling() {
 onMounted(() => {
   loadAll()
   loadDatabase()
+  loadMail()
 })
 onActivated(() => {
   // 首次挂载时 onActivated 也会触发，避免重复请求
   if (jobs.value.length > 0) loadAll({ quiet: true })
   if (dbInfo.value) loadDatabase({ quiet: true })
+  if (mailInfo.value) loadMail()
   startPolling()
 })
 onDeactivated(stopPolling)
@@ -539,6 +767,73 @@ onUnmounted(stopPolling)
 
 .admin-job {
   padding: 20px;
+}
+
+/* ---------- 交易日历 ---------- */
+
+.admin-calendar {
+  padding: 20px;
+}
+
+.cal-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.cal-day {
+  flex: 1 0 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.cal-day.closed {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.cal-day.open {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--primary-dark);
+}
+
+/* 「今天」用深色描边，不用主色：主色是蓝的，而蓝色底在这一排里专指「开市」，
+   今天若恰好休市（灰底 + 蓝框），两种含义就打架了 */
+.cal-day.today {
+  box-shadow: 0 0 0 2px #0f172a;
+  font-weight: 600;
+}
+
+.cal-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-week {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.cal-foot {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cal-warn {
+  color: #b45309;
 }
 
 .admin-key {
@@ -851,6 +1146,32 @@ onUnmounted(stopPolling)
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.7;
+}
+
+/* ---------- 日报邮件卡片 ---------- */
+.admin-mail {
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/*
+  四项元信息。必须自己写媒体查询：.mail-meta 与 .admin-meta 特异性相同、
+  又排在文件后面，会把 .admin-meta 的 980/620 断点覆盖掉。
+*/
+.mail-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .mail-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .mail-meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 </style>

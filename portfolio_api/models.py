@@ -241,3 +241,18 @@ class DailyReport(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class TradingDay(Base):
+    """A 股交易日历（缓存）。
+
+    只有一列业务数据：`trade_date`。这张表**不是用户数据**，随时可以删掉重建 ——
+    服务启动或判断到「日历没覆盖目标日期」时会自动从 akshare 重新拉取全量覆盖。
+
+    为什么不塞一张 key-value 的通用缓存表：日历要按日期区间做 between 查询
+    （判断「在区间内但不在集合里 = 休市」），单列 + 主键索引才是它需要的形态。
+    """
+
+    __tablename__ = "trading_days"
+
+    trade_date = Column(Date, primary_key=True)          # 有索引即主键
+    fetched_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -77,3 +77,35 @@ export async function deleteBackup(name) {
 export function backupDownloadUrl(name) {
   return `${API_BASE}/api/admin/database/backups/${encodeURIComponent(name)}`
 }
+
+// ---------- 日报邮件推送 ----------
+
+/** 邮件配置状态（不含密码，账号已打码） */
+export async function getMailConfig() {
+  return await request(`${API_BASE}/api/admin/mail`)
+}
+
+/** 立即把某一天的日报发出去（默认今天） */
+export async function sendMailNow({ reportDate = '' } = {}) {
+  const query = reportDate ? `?report_date=${encodeURIComponent(reportDate)}` : ''
+  return await request(`${API_BASE}/api/admin/mail/send${query}`, { method: 'POST' })
+}
+
+/** 发一封测试邮件：只验证 SMTP 通不通 */
+export async function sendTestMail() {
+  return await request(`${API_BASE}/api/admin/mail/test`, { method: 'POST' })
+}
+
+// ---------- A 股交易日历 ----------
+
+/** 交易日历状态：今天开不开市、覆盖范围、未来若干天 */
+export async function getTradingCalendar({ days = 10 } = {}) {
+  return await request(`${API_BASE}/api/admin/trading-calendar?days=${days}`)
+}
+
+/** 强制联网刷新日历（akshare）。失败不抛错，返回的 calendar_stale 会是 true */
+export async function refreshTradingCalendar({ days = 10 } = {}) {
+  return await request(`${API_BASE}/api/admin/trading-calendar/refresh?days=${days}`, {
+    method: 'POST',
+  })
+}

@@ -1,6 +1,6 @@
-"""定时任务引擎：注册表 + 每日调度循环 + 两个内置任务。
+"""定时任务引擎：注册表 + 每日调度循环 + 五个内置任务。
 
-## 有哪四个任务
+## 有哪五个任务
 
 | key | 干什么 | 默认时刻 |
 |---|---|---|
@@ -8,10 +8,25 @@
 | `watchlist_snapshot` | 观察池：把每只标的的「当天快照」写进 `watchlist_snapshots` | 15:30 |
 | `portfolio_daily_report` | 给每个组合生成当天的日报（今日盈亏 + 明细 + 榜单） | 15:40 |
 | `watchlist_daily_report` | 生成观察池日报（等权盈亏 + 股息率/目标价信号） | 15:45 |
+| `daily_report_mail` | 把当天全部日报合成一封邮件发出 | 15:50 |
 
 时刻都在 `.env` 里改，且**收盘后再跑**：15:00 收盘，15:05 取到的是当日收盘价；
-15:30 / 15:40 / 15:45 拉开间隔，既避免同时打行情接口，也保证日报读到的是
-**刷新之后**的价格与观察池快照（顺序反了就会拿昨天的价算今天的盈亏）。
+15:30 / 15:40 / 15:45 / 15:50 拉开间隔，既避免同时打行情接口，也保证日报读到的是
+**刷新之后**的价格与观察池快照（顺序反了就会拿昨天的价算今天的盈亏），
+而邮件必须等两份日报都落库才有内容可发。
+
+## 什么时候不跑
+
+五个任务默认**只在 A 股交易日执行**（`JobSpec.trading_day_only`）。周末与法定节假
+日没有新行情：跑价格刷新只会把同一个价再写一遍，观察池会多出一条与周五完全相同的
+快照，日报的「今日盈亏」恒为 0。判断依据是 `trading_calendar` 里的真实交易日历
+（不是「周一~周五」，因为调休与连休会让星期几失效）。
+
+非交易日仍会落一条 `skipped` 记录，message 写成「2026-11-07 周六，A股休市，
+非交易日跳过」—— 后台管理页上「今天跑过但没活干」和「调度根本没在跑」必须能区分开。
+
+**手动触发不受限制**：用户点了按钮就是想现在跑，替他按日历拦下来反而是 bug。
+全局开关 `SCHEDULE_TRADING_DAY_ONLY=false` 可以整个关掉这个行为（调试、补数据用）。
 
 ## 怎么跑
 
@@ -44,6 +59,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+import trading_calendar
 from config import settings
 from database import SessionLocal
 from daily_reports import generate_portfolio_reports, generate_watchlist_report
@@ -60,11 +76,15 @@ JOB_STATUSES = ("running", "success", "partial", "failed", "skipped")
 
 MAX_ATTEMPTS_PER_DAY = 3
 POLL_INTERVAL_SECONDS = 60
+# 「下一次运行」最多往后找多少天。春节+周末连休 9 天是常态，留 60 天足够，
+# 同时保证日历彻底挂掉时也只是算错、不会死循环。
+NEXT_RUN_LOOKAHEAD_DAYS = 60
 
 DEFAULT_WATCHLIST_TIME = "15:30"
 DEFAULT_ASSET_PRICE_TIME = "15:05"
 DEFAULT_PORTFOLIO_REPORT_TIME = "15:40"
 DEFAULT_WATCHLIST_REPORT_TIME = "15:45"
+DEFAULT_MAIL_TIME = "15:50"
 
 # (job_key, 日期) -> 今天已尝试轮数。模块级，避免外部源挂掉时每分钟重试。
 _attempt_state: Dict[tuple, int] = {}
@@ -100,12 +120,33 @@ def parse_hhmm(raw: str, fallback: str, label: str = "") -> time_of_day:
         return time_of_day(int(hour_text), int(minute_text))
 
 
-def next_run_at(spec: "JobSpec", now: Optional[datetime] = None) -> datetime:
-    """下一次计划运行时刻：今天的时刻没过就是今天，否则明天。"""
+def next_run_at(
+    spec: "JobSpec",
+    now: Optional[datetime] = None,
+    is_trading: Optional[Callable[[date], bool]] = None,
+) -> datetime:
+    """下一次计划运行时刻：今天的时刻没过就是今天，否则从明天起找。
+
+    只在交易日跑的任务会跳过周末与节假日 —— 周五收盘后，下次运行是**下周一**，
+    而不是周六 15:05 一个注定被跳过的时刻（那样界面上会显示「明天 15:05」，
+    用户等一天后发现什么都没有）。
+
+    `is_trading` 可注入，便于调用方复用同一个数据库会话；默认按日历查。
+    """
     current = now or now_local()
     candidate = datetime.combine(current.date(), spec.schedule_time, tzinfo=SHANGHAI)
     if candidate <= current:
         candidate += timedelta(days=1)
+    if not spec.runs_on_trading_days_only:
+        return candidate
+
+    judge = is_trading or trading_calendar.is_trading_day
+    for _ in range(NEXT_RUN_LOOKAHEAD_DAYS):
+        if judge(candidate.date()):
+            return candidate
+        candidate += timedelta(days=1)
+    # 兜底：日历与规则都没给出交易日（理论上不会发生），返回窗口末尾而不是抛异常
+    logger.warning("未来 %d 天内找不到交易日，next_run_at 按窗口末尾返回", NEXT_RUN_LOOKAHEAD_DAYS)
     return candidate
 
 
@@ -141,6 +182,9 @@ class JobSpec:
     time_attr: str           # settings 上的时刻字段名
     default_time: str
     runner: Callable[[Session], Awaitable[JobResult]]
+    # 是否只在 A 股交易日跑。五个内置任务全为 True：非交易日没有新收盘价，
+    # 跑出来的快照是重复数据、日报的「今日盈亏」恒为 0。
+    trading_day_only: bool = True
 
     @property
     def enabled(self) -> bool:
@@ -153,8 +197,14 @@ class JobSpec:
         )
 
     @property
+    def runs_on_trading_days_only(self) -> bool:
+        """任务本身要求 + 全局开关。任一为 false 就退回「每天」。"""
+        return self.trading_day_only and bool(settings.schedule_trading_day_only)
+
+    @property
     def schedule_label(self) -> str:
-        return f"每天 {self.schedule_time.strftime('%H:%M')}（Asia/Shanghai）"
+        prefix = "交易日" if self.runs_on_trading_days_only else "每天"
+        return f"{prefix} {self.schedule_time.strftime('%H:%M')}（Asia/Shanghai）"
 
 
 # ========== 任务 1：观察池每日快照 ==========
@@ -324,6 +374,60 @@ async def run_watchlist_daily_report(db: Session) -> JobResult:
     return result
 
 
+# ========== 任务 5：日报邮件 ==========
+
+async def run_daily_report_mail(db: Session) -> JobResult:
+    """把当天已生成的日报合成一封邮件发出。
+
+    不做「邮件发失败就重新生成日报」：日报本身是好的，重生成只会再打一遍行情。
+    失败就让调度在当天重试（最多 3 次），实在不行用户在后台点「发送今日日报」。
+    """
+    from report_mail import (
+        MailSendError,
+        NoReportsError,
+        send_daily_reports,
+    )
+
+    today = now_local().date()
+
+    if not settings.mail_configured:
+        # total=0 → status=skipped：没配置不是「失败」，后台看到「跳过」就够了
+        return JobResult(
+            total=0,
+            message=(
+                "未配置邮件：请在 .env 填写 "
+                + "、".join(settings.mail_missing_config)
+                + "（QQ 邮箱要填授权码，不是登录密码）"
+            ),
+        )
+
+    try:
+        info = await send_daily_reports(db, report_date=today)
+    except NoReportsError as exc:
+        # 今天的日报还没生成：记失败，让调度稍后重试（15:40 / 15:45 可能还在跑）
+        return JobResult(total=1, failed=1, message=str(exc), errors=[str(exc)])
+    except MailSendError as exc:
+        logger.warning("daily report mail: send failed (%s)", exc)
+        return JobResult(total=1, failed=1, message=str(exc)[:500], errors=[str(exc)])
+    except Exception as exc:
+        logger.exception("daily report mail: unexpected error")
+        return JobResult(
+            total=1,
+            failed=1,
+            message=f"{type(exc).__name__}: {exc}"[:500],
+            errors=[f"{type(exc).__name__}: {exc}"],
+        )
+
+    return JobResult(
+        total=1,
+        succeeded=1,
+        message=(
+            f"已发送 {info['report_count']} 份日报到 "
+            + "、".join(info["recipients"])  # type: ignore[arg-type]
+        ),
+    )
+
+
 # ========== 注册表 ==========
 
 def get_job_specs() -> Dict[str, JobSpec]:
@@ -376,6 +480,18 @@ def get_job_specs() -> Dict[str, JobSpec]:
             time_attr="daily_report_watchlist_time",
             default_time=DEFAULT_WATCHLIST_REPORT_TIME,
             runner=run_watchlist_daily_report,
+        ),
+        JobSpec(
+            key="daily_report_mail",
+            name="日报邮件推送",
+            description=(
+                "把当天已生成的日报（全部组合 + 观察池）合成一封 HTML 邮件发到配置的邮箱。"
+                "必须排在两份日报之后，否则邮件里会缺内容；未配置 SMTP 时自动跳过。"
+            ),
+            enabled_attr="daily_report_mail_enabled",
+            time_attr="daily_report_mail_time",
+            default_time=DEFAULT_MAIL_TIME,
+            runner=run_daily_report_mail,
         ),
     )
     return {spec.key: spec for spec in specs}
@@ -430,10 +546,35 @@ def reset_attempt_state() -> None:
     _attempt_state.clear()
 
 
+def _off_day_message(spec: JobSpec, db: Session, today: Optional[date] = None) -> Optional[str]:
+    """非交易日返回一句跳过原因，该跑则返回 None。
+
+    **只在调度触发时生效**：手动触发一律照跑 —— 用户点了按钮就是想现在跑
+    （补数据、验证配置都可能发生在周末），替他拦下来反而是 bug。
+
+    `today` 显式传入而不是内部取 `now_local()`：调度循环的 `tick(now=...)`
+    可以是任意时刻（补跑、测试），若这里偷偷用真实时钟，
+    就会出现「tick 说今天是 3 月 2 日、跳过判断说今天是 11 月 7 日」的分裂。
+    """
+    if not spec.runs_on_trading_days_only:
+        return None
+    target = today or now_local().date()
+    try:
+        status = trading_calendar.day_status(target, db)
+    except Exception:                       # 日历表缺失 / 锁冲突都不能让任务停摆
+        logger.exception("交易日判断失败，按交易日继续执行 %s", spec.key)
+        return None
+    if status.is_trading:
+        return None
+    tail = "（交易日历未覆盖，按工作日规则判断）" if status.source == "weekday-fallback" else ""
+    return f"{status.day} {status.reason}，非交易日跳过{tail}"
+
+
 async def execute_job(
     key: str,
     trigger: str = "schedule",
     db: Optional[Session] = None,
+    today: Optional[date] = None,
 ) -> Optional[JobRun]:
     """执行一个任务并落一条 `job_runs`。
 
@@ -458,8 +599,14 @@ async def execute_job(
         session.commit()
         session.refresh(run)
 
+        off_day = _off_day_message(spec, session, today) if trigger == "schedule" else None
         try:
-            result = await spec.runner(session)
+            if off_day is not None:
+                # total=0 → status=skipped。后台看得到「今天是非交易日、所以没干活」，
+                # 而不是一堆「没有运行记录」让人误以为调度挂了。
+                result = JobResult(total=0, message=off_day)
+            else:
+                result = await spec.runner(session)
         except asyncio.CancelledError:
             run.status = "failed"
             run.message = "任务被取消（服务关闭）"
@@ -547,7 +694,7 @@ async def tick(now: Optional[datetime] = None) -> List[JobRun]:
             logger.info(
                 "scheduler: running %s (attempt %d/%d)", spec.key, attempt, MAX_ATTEMPTS_PER_DAY
             )
-            run = await execute_job(spec.key, trigger="schedule", db=db)
+            run = await execute_job(spec.key, trigger="schedule", db=db, today=today)
             if run is not None:
                 ran.append(run)
                 logger.info(
@@ -559,16 +706,33 @@ async def tick(now: Optional[datetime] = None) -> List[JobRun]:
     return ran
 
 
+def _log_today_if_off_day() -> None:
+    """启动时如果今天休市，日志里明说一句。
+
+    否则「后台一直显示跳过」看起来像坏了，其实只是周末。
+    """
+    try:
+        status = trading_calendar.day_status(now_local().date())
+    except Exception:
+        return
+    if not status.is_trading:
+        logger.info(
+            "今天是 %s（%s），定时任务将在下一个交易日恢复", status.day, status.reason
+        )
+
+
 async def run_scheduler() -> None:
     """无限循环：启动立刻 tick 一次，之后每 60 秒一次。"""
     specs = get_job_specs()
     logger.info(
         "scheduler started: %s",
         "; ".join(
-            f"{s.key}@{s.schedule_time.strftime('%H:%M')}(enabled={s.enabled})"
+            f"{s.key}@{s.schedule_time.strftime('%H:%M')}(enabled={s.enabled}"
+            f"{',trading-day-only' if s.runs_on_trading_days_only else ''})"
             for s in specs.values()
         ),
     )
+    _log_today_if_off_day()
     while True:
         try:
             await tick()

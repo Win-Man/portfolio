@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 import net
+import trading_calendar
 from database import engine, SessionLocal, Base
 from models import Portfolio, Asset
 from routers import portfolios, assets, stocks, goals, calendar, watchlist, admin, reports
@@ -71,10 +73,36 @@ def run_lightweight_migrations():
 run_lightweight_migrations()
 
 
+async def _warm_trading_calendar() -> None:
+    """启动时预热 A 股交易日历。**永不抛异常、永不拖住启动**。
+
+    定时任务靠它判断「今天该不该跑」。表为空时不预热，调度会把「日历没数据」
+    退化成「按工作日判断」——今天要是周六就跳过，可到了周一也还是能跑，
+    但界面上的「下一个交易日」会算错，所以启动时主动拉一次更稳妥。
+
+    放到线程里 + 20 秒硬超时：akshare 走外网，最坏情况会挂住握手，
+    不能因此卡在启动阶段（服务起不来比日历旧一天严重得多）。
+    """
+    def _work() -> None:
+        session = SessionLocal()
+        try:
+            trading_calendar.ensure_calendar(session, date.today())
+        finally:
+            session.close()
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_work), timeout=20)
+    except asyncio.TimeoutError:
+        logger.warning("交易日历预热超时（20s），本次先按工作日规则判断")
+    except Exception:
+        logger.exception("交易日历预热失败，先按工作日规则判断")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动/关闭钩子（替代已弃用的 @app.on_event）。"""
     init_sample_data()
+    await _warm_trading_calendar()
 
     # 定时任务：观察池快照 + 投资组合价格刷新，共用一个后台协程，
     # 关闭时 cancel 并 await 收尾。测试环境（conftest 把两个开关都设为 false）不启动。

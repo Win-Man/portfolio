@@ -24,3 +24,7 @@ dev-dependencies = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    # 跳过 conftest 里「一律视为交易日」的夹具，直接测真实日历实现
+    "real_trading_calendar: 用例自己控制 trading_days 表，不 patch 交易日判断",
+]
