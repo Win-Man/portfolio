@@ -464,3 +464,83 @@ def test_summary_regression_locked(client):
     assert progress["current_annual_income"] == summary["expected_annual_income"]
     assert progress["total_market_value"] == summary["total_market_value"]
     assert progress["weighted_ttm_yield"] == summary["weighted_ttm_yield"]
+
+
+# ---------- 路径 ③：只靠股息复投，多少年达到目标 ----------
+
+def test_progress_reinvest_uses_assumed_yield(client, db_session):
+    """20. 复投年数用「假设收益率」算，默认即加权 TTM"""
+    _add_asset(db_session, PID_EMPTY, quantity=1000, price=10.0,
+               dividend_per_share=1.2, ttm_yield=12.0)
+    g = _create_goal(client, PID_EMPTY, "复投", 12000)
+
+    d = client.get(f"/api/portfolios/{PID_EMPTY}/goals/{g['id']}/progress").json()
+
+    # 年收入 1200、目标 12000、加权 TTM 12% → ln(10)/ln(1.12) ≈ 20.3 年
+    assert d["assumed_yield_is_default"] is True
+    assert d["reinvest_years"] == pytest.approx(20.3)
+    assert d["reinvest_years_ceil"] == 21
+    assert d["reinvest_note"] == ""
+
+
+def test_progress_reinvest_follows_yield_override(client, db_session):
+    """21. 手改假设收益率 → 复投年数跟着变（同一屏只有一个收益率假设）"""
+    _add_asset(db_session, PID_EMPTY, quantity=1000, price=10.0,
+               dividend_per_share=1.2, ttm_yield=12.0)
+    g = _create_goal(client, PID_EMPTY, "复投覆盖", 12000)
+    url = f"/api/portfolios/{PID_EMPTY}/goals/{g['id']}/progress"
+
+    slow = client.get(url).json()                    # 默认 12%
+    fast = client.get(url, params={"assumed_yield": 24}).json()
+
+    assert fast["assumed_yield_percent"] == pytest.approx(24)
+    assert fast["reinvest_years"] < slow["reinvest_years"]
+    # 24% 正好是 12% 的两倍：ln(10)/ln(1.24) ≈ 10.7
+    assert fast["reinvest_years"] == pytest.approx(10.7)
+
+
+def test_progress_reinvest_unreachable_reasons(client, db_session):
+    """22. 空组合（无股息）与收益率为 0：years 为 None，note 可直接展示"""
+    g = _create_goal(client, PID_EMPTY, "无收入", 12000)
+    url = f"/api/portfolios/{PID_EMPTY}/goals/{g['id']}/progress"
+
+    d = client.get(url).json()
+    assert d["current_annual_income"] == 0
+    assert d["reinvest_years"] is None
+    assert d["reinvest_years_ceil"] is None
+    assert d["reinvest_note"] == "当前无股息收入"
+
+    # 有收入但假设收益率手填 0 → 收入不会增长
+    _add_asset(db_session, PID_EMPTY, quantity=1000, price=10.0,
+               dividend_per_share=1.2, ttm_yield=12.0)
+    d = client.get(url, params={"assumed_yield": 0}).json()
+    assert d["reinvest_years"] is None
+    assert d["reinvest_note"] == "复投收益率为 0"
+
+
+def test_progress_reinvest_zero_when_achieved(client, db_session):
+    """23. 目标已达成 → 0 年（界面据此隐藏这一行）"""
+    _add_asset(db_session, PID_EMPTY, quantity=1000, price=10.0,
+               dividend_per_share=1.2, ttm_yield=12.0)
+    g = _create_goal(client, PID_EMPTY, "已达成", 1000)   # 年收入 1200 > 目标 1000
+
+    d = client.get(f"/api/portfolios/{PID_EMPTY}/goals/{g['id']}/progress").json()
+
+    assert d["is_achieved"] is True
+    assert d["reinvest_years"] == 0.0
+    assert d["reinvest_years_ceil"] == 0
+    assert d["reinvest_note"] == ""
+
+
+def test_progress_reinvest_consistent_with_current_income(client, db_session):
+    """24. 与「当前年收入」同口径：D0 就是 current_annual_income，不是市值 × 收益率"""
+    _add_asset(db_session, PID_EMPTY, quantity=1000, price=10.0,
+               dividend_per_share=1.2, ttm_yield=12.0)
+    g = _create_goal(client, PID_EMPTY, "口径", 12000)
+
+    d = client.get(f"/api/portfolios/{PID_EMPTY}/goals/{g['id']}/progress").json()
+
+    # 若误用「市值 × 收益率」当起点，这里会因为 ttm_yield 与 dps/price 不等而暴露
+    assert d["current_annual_income"] == pytest.approx(1200)
+    base = d["current_annual_income"] * (1 + d["assumed_yield_percent"] / 100) ** d["reinvest_years_ceil"]
+    assert base >= d["target_annual_income"]

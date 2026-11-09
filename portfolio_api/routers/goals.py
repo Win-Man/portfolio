@@ -5,6 +5,8 @@
 - 「当前收入」= Σ(quantity × dividend_per_share)，与 summary.expected_annual_income 完全一致。
 - 收益率路径只用「收入 ÷ 持仓市值」；加权 TTM 收益率仅作为「默认假设加仓收益率」的来源，
   不参与进度 / 缺口计算。
+- 三条达成路径：① 再投入本金 ② 整体息率提到多少 ③ 只靠股息复投需要多少年。
+  ③ 用的就是 ① 的假设收益率（默认 = 加权 TTM），因此「改一个输入框，两条路径同时变」。
 - 所有计算在后端（口径唯一、可测），前端只做展示与格式化。
 """
 from typing import List, Optional
@@ -18,6 +20,7 @@ from portfolio_math import (
     expected_annual_income,
     goal_gap,
     has_mock_price,
+    reinvest_years,
     total_market_value,
     weighted_ttm_yield,
 )
@@ -189,6 +192,10 @@ def get_goal_progress(
         current_yield_percent = None
         yield_gap_points = None
 
+    # 路径 ③：只靠股息复投（不追加新本金）→ 年收入按 (1 + 假设收益率) 复利增长。
+    # 与路径 ① 共用同一个收益率假设：同屏两个「收益率」会让用户没法判断哪个在起作用。
+    reinvest = reinvest_years(current_annual, target_annual, assumed_yield_percent)
+
     # calc_note：按顺序取第一条命中
     if is_achieved:
         calc_note = "目标已达成"
@@ -222,6 +229,9 @@ def get_goal_progress(
         required_yield_percent=required_yield_percent,
         current_yield_percent=current_yield_percent,
         yield_gap_points=yield_gap_points,
+        reinvest_years=reinvest["years"],
+        reinvest_years_ceil=reinvest["years_ceil"],
+        reinvest_note=reinvest["note"],
         total_market_value=market_value,
         weighted_ttm_yield=portfolio_ttm,
         asset_count=len(assets),

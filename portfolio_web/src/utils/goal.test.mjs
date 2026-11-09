@@ -18,6 +18,7 @@ import {
   toMonthly,
   progressPercentWidth,
   formatYieldPercent,
+  formatYears,
   pickInitialGoalId,
   readRememberedGoalId,
   persistGoalId,
@@ -93,6 +94,32 @@ test('formatYieldPercent：null / undefined / 非有限数 → 「—」', () =>
   assert.equal(formatYieldPercent(undefined), '—')
   assert.equal(formatYieldPercent(NaN), '—')
   assert.equal(formatYieldPercent('abc'), '—')
+})
+
+// -------------------------------------------------------------- formatYears
+
+test('formatYears：保留 1 位小数', () => {
+  assert.equal(formatYears(65.2), '65.2 年')
+  assert.equal(formatYears(20.3), '20.3 年')
+  assert.equal(formatYears(1), '1.0 年')
+  assert.equal(formatYears('7.5'), '7.5 年')
+})
+
+test('formatYears：太大或太小的年数不给假精度', () => {
+  // 100 年以上时小数位没有意义，也不该让卡片里出现「6032.7 年」
+  assert.equal(formatYears(100), '100 年以上')
+  assert.equal(formatYears(6032.7), '100 年以上')
+  // 未达成但 round 到 0.0 会读成「马上就达成」
+  assert.equal(formatYears(0.05), '不足 0.1 年')
+  assert.equal(formatYears(0.1), '0.1 年')
+})
+
+test('formatYears：不可达 / 已达成 / 脏值', () => {
+  assert.equal(formatYears(0), '0 年')
+  assert.equal(formatYears(null), '—')
+  assert.equal(formatYears(undefined), '—')
+  assert.equal(formatYears(NaN), '—')
+  assert.equal(formatYears(-3), '—')
 })
 
 // -------------------------------------------------------- pickInitialGoalId

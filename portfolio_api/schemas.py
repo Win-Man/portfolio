@@ -221,6 +221,13 @@ class GoalProgressResponse(BaseModel):
     current_yield_percent: Optional[float]     # 当前年收入 ÷ 市值 × 100；市值<=0 → null
     yield_gap_points: Optional[float]          # required − current；任一为 null → null
 
+    # ── 路径 ③：只靠股息复投，不追加新本金
+    # 年收入按 (1 + 假设收益率) 复利增长；收益率取本次采用的 assumed_yield_percent
+    # （默认即组合加权 TTM），保证同屏只有一个「收益率假设」在驱动所有推算
+    reinvest_years: Optional[float]            # 需要的年数（1 位小数）；不可达 → null
+    reinvest_years_ceil: Optional[int]         # 向上取整的「第几年」达标；已达成为 0
+    reinvest_note: str                         # 不可达的短原因；正常为空串
+
     # ── 参考与提示
     total_market_value: float
     weighted_ttm_yield: float                  # 仅供对照 / 说明默认值来源

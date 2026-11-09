@@ -111,7 +111,20 @@
                 <span class="fact-sub">月均 ¥{{ formatAmount(progress.gap_monthly) }}</span>
               </li>
 
-              <!-- 5. 达成路径：本金与收益率两种解法压在同一行，像一句人话而不是两张卡 -->
+              <!-- 5. 只靠股息复投：与「缺口」并排，是第三条达成路径，但只给一个年数 -->
+              <li v-if="!isAchieved" class="fact">
+                <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path v-for="(d, i) in iconPaths('reinvest')" :key="i" :d="d" />
+                </svg>
+                <span class="fact-label">
+                  复投
+                  <InfoTooltip :text="reinvestTooltip" />
+                </span>
+                <span class="fact-value">{{ reinvestYearsText }}</span>
+                <span class="fact-sub">{{ reinvestSubText }}</span>
+              </li>
+
+              <!-- 6. 达成路径：本金与收益率两种解法压在同一行，像一句人话而不是两张卡 -->
               <li class="fact fact-path">
                 <svg class="fact-icon" viewBox="0 0 16 16" aria-hidden="true">
                   <path v-for="(d, i) in iconPaths('up')" :key="i" :d="d" />
@@ -130,7 +143,7 @@
           </div>
         </div>
 
-        <!-- 6. 假设加仓收益率：驱动「再投入本金」这一项，收成卡片底部一行 -->
+        <!-- 7. 假设加仓收益率：驱动「再投入本金」与「股息复投」两项，收成卡片底部一行 -->
         <div class="goal-assumed">
           <span class="goal-assumed-label">
             假设加仓收益率
@@ -155,7 +168,7 @@
           <span v-else class="goal-assumed-hint">留空 = 加权 TTM</span>
         </div>
 
-        <!-- 7. 提示区 -->
+        <!-- 8. 提示区 -->
         <div v-if="progress.has_mock_price" class="goal-notice goal-notice-warning">
           含模拟价格，进度仅供参考
         </div>
@@ -171,7 +184,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import InfoTooltip from './InfoTooltip.vue'
 import { formatAmount } from '../utils/format.js'
-import { formatYieldPercent, progressPercentWidth } from '../utils/goal.js'
+import { formatYieldPercent, formatYears, progressPercentWidth } from '../utils/goal.js'
 
 const props = defineProps({
   goals: {
@@ -219,6 +232,8 @@ const ICONS = {
   target: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M8 5.3a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4z'],
   gap: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M5.2 8h5.6'],
   up: ['M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z', 'M8 11.2V5.1', 'M5.7 7.4L8 5.1l2.3 2.3'],
+  // 复投：环形箭头（不给外圈，14px 下双圆会糊成一团）
+  reinvest: ['M12.6 8.4a4.6 4.6 0 1 1-1.4-3.6', 'M11.9 2.3v2.9H9'],
   flag: ['M3.9 1.7v12.6', 'M3.9 2.5h7.8l-1.7 2.8 1.7 2.8H3.9']
 }
 
@@ -263,6 +278,32 @@ const hasAdditionalCapital = computed(() => {
 const hasRequiredYield = computed(() => {
   const v = props.progress?.required_yield_percent
   return v !== null && v !== undefined && Number.isFinite(Number(v))
+})
+
+// ---------- 路径 ③：只靠股息复投（后端算好年数，这里只管怎么读） ----------
+const reinvestYearsText = computed(() => formatYears(props.progress?.reinvest_years))
+
+/**
+ * 副标题：能算 → 「第 N 年达标」；算不出 → 后端给的短原因（「当前无股息收入」等）。
+ * 年数超过 100 时主数值已退化成「100 年以上」，再标「第 N 年」只会假装精确，索性不写。
+ */
+const reinvestSubText = computed(() => {
+  const note = typeof props.progress?.reinvest_note === 'string' ? props.progress.reinvest_note.trim() : ''
+  if (note) return note
+  const years = Number(props.progress?.reinvest_years)
+  if (Number.isFinite(years) && years >= 100) return ''
+  const ceil = Number(props.progress?.reinvest_years_ceil)
+  if (!Number.isFinite(ceil) || ceil <= 0) return ''
+  return `第 ${ceil} 年达标`
+})
+
+const reinvestTooltip = computed(() => {
+  const y = formatYieldPercent(props.progress?.assumed_yield_percent)
+  return (
+    `假设每年股息全部按 ${y} 再买入、不追加新本金，年收入就按 ${y} 逐年复利增长；` +
+    `年数 = ln(目标 ÷ 当前) ÷ ln(1 + 收益率)。收益率取卡片底部的「假设加仓收益率」` +
+    `（默认即组合加权 TTM），改它会连这条路径一起变。`
+  )
 })
 
 const calcNote = computed(() => {
@@ -624,6 +665,12 @@ onBeforeUnmount(clearAssumedTimer)
 
 .fact-label {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  /* 固定标签列宽：2 个字 + 「复投」那行的 16px 提示图标，
+     不这么做的话只有带图标的行数值会向右错开 20px，一眼就能看出参差。 */
+  min-width: 44px;
+  gap: 3px;
   font-size: 12px;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -763,6 +810,12 @@ onBeforeUnmount(clearAssumedTimer)
     justify-content: start;
     column-gap: 32px;
   }
+
+  /* 「再投入本金，或整体息率…」是一整句，被切到半列里会折成三行；
+     它独占一行后，上面两行正好是「当前/目标」「缺口/复投」两组同类数字。 */
+  .fact-path {
+    grid-column: 1 / -1;
+  }
 }
 
 /*
@@ -771,12 +824,14 @@ onBeforeUnmount(clearAssumedTimer)
   这里改成与图标左对齐向右展开。
 */
 .goal-assumed-label :deep(.tooltip-content),
+.fact-label :deep(.tooltip-content),
 .fact-text :deep(.tooltip-content) {
   left: 0;
   transform: none;
 }
 
 .goal-assumed-label :deep(.tooltip-content::after),
+.fact-label :deep(.tooltip-content::after),
 .fact-text :deep(.tooltip-content::after) {
   left: 12px;
   transform: none;

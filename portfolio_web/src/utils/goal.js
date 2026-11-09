@@ -62,6 +62,24 @@ export function formatYieldPercent(v) {
 }
 
 /**
+ * 「只靠股息复投需要多少年」的展示格式。
+ * 后端给的是精确年数（1 位小数）；超过 100 年时不再装精确 —— 这种量级下
+ * 小数位是假的，且用户真正要读到的是「这辈子等不到」这个结论。
+ * null / undefined / 非有限数 / 负数 → 「—」（不可达，具体原因由后端 note 说明）。
+ * @param {number|string|null|undefined} v
+ * @returns {string}
+ */
+export function formatYears(v) {
+  if (v === null || v === undefined) return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return '—'
+  if (n >= 100) return '100 年以上'
+  if (n === 0) return '0 年'
+  if (n < 0.1) return '不足 0.1 年'
+  return `${n.toFixed(1)} 年`
+}
+
+/**
  * 首屏选中哪个目标：
  *   记忆值仍在列表里 → 用它；否则回退到第一个目标；空列表 / 非法入参 → null。
  * @param {Array<{id:number}>|undefined|null} goals

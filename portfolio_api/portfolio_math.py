@@ -9,6 +9,8 @@
 - **不使用成本口径** `cost_price`（成本与收入/目标无关）。
 """
 
+import math
+
 from market import is_etf
 
 
@@ -57,6 +59,54 @@ def goal_gap(current_annual: float, target_annual: float) -> dict:
         "progress_percent": (current / target * 100) if target > 0 else 0.0,
         "is_achieved": target > 0 and current >= target,
     }
+
+
+def reinvest_years(
+    current_annual: float, target_annual: float, yield_percent: float
+) -> dict:
+    """只靠「股息复投」，多少年能达到目标（纯函数，**唯一实现**）。
+
+    模型：每年把当年全部股息按 `yield_percent` 再买入，买到的份额下一年同样派息，
+    于是年收入按 (1 + y) 复利增长：
+
+        D(n) = D0 × (1 + y)^n      →      n = ln(目标 / D0) / ln(1 + y)
+
+    为什么不「先算本金、再逐年累加」：TTM 收益率本身口径就是「股息 ÷ 市值」，
+    而 `Σ(qty × dps) = Σ(市值 × ttm_yield)`（两处是同一个数），所以
+    「用 D0 直接复利」与「本金复利后再乘收益率」在数学上完全等价。
+    直接对收入复利少一次除法，也就不会因为市值为 0 而除零。
+
+    边界（都返回 `years=None` + 一句可直接展示的 note）：
+    - 当前收入 <= 0：没有股息可投，复投无从开始；
+    - 收益率 <= 0：收入恒定，永远到不了；
+    - 已达成：`years=0.0`、`years_ceil=0`，note 为空（由界面决定要不要展示此路径）。
+
+    返回值：
+        years       精确年数（1 位小数，未达成时至少 0.1）；不可达 → None
+        years_ceil  向上取整，即「第几年」达标；不可达 → None
+        note        不可达的短原因；正常为空串
+    """
+    current = float(current_annual or 0)
+    target = float(target_annual or 0)
+    y = float(yield_percent or 0)
+
+    if target <= 0:
+        return {"years": None, "years_ceil": None, "note": "目标金额为 0"}
+    if current >= target:
+        return {"years": 0.0, "years_ceil": 0, "note": ""}
+    if current <= 0:
+        return {"years": None, "years_ceil": None, "note": "当前无股息收入"}
+    if not math.isfinite(y) or y <= 0:
+        return {"years": None, "years_ceil": None, "note": "复投收益率为 0"}
+
+    raw_years = math.log(target / current) / math.log1p(y / 100)
+
+    # 1 位小数用于展示；0.04 → 0.0 会被读成「马上就达成」，抬到 0.1 更诚实
+    years = max(round(raw_years, 1), 0.1)
+    # 减 1e-9 再取整：浮点误差会让 8.0000000001 变成「第 9 年」
+    years_ceil = max(int(math.ceil(raw_years - 1e-9)), 1)
+
+    return {"years": years, "years_ceil": years_ceil, "note": ""}
 
 
 def has_mock_price(assets) -> bool:
